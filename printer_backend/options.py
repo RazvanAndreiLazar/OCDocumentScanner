@@ -16,7 +16,8 @@ class ScanOption():
     max: float | None = None
     unit: str = ''
 
-    value: str | None = None
+    value: str | None = None        # the current value, changed by Printer.set_option
+    default: str | None = None      # what the device listed; options that still have it aren't sent to a scan
     active: bool = True
     is_boolean: bool = False        # '--flag[=(yes|no)]': value must be passed as --flag=yes
 
@@ -108,7 +109,7 @@ def parse_help(text: str) -> dict[str, ScanOption]:
 
         rest, groups = _split_trailing_brackets(rest or '')
         defaults = [group for group in groups if group not in OPTION_TAGS]
-        option.value = defaults[0] if defaults else None
+        option.value = option.default = defaults[0] if defaults else None
         option.active = 'inactive' not in groups
 
         if boolean:
