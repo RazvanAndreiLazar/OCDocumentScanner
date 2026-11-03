@@ -1,32 +1,91 @@
 from printer_backend.printer import Printer
+from printer_backend.printer_repository import PrinterRepository
 from printer_backend.scanning import (
-    FLIP, SCAN_FOLDER_DEFAULT, SCAN_FORMATS, Done, NeedsInput, PageScanned, Progress, source_kind)
+    FLIP, SCAN_FOLDER_DEFAULT, SCAN_FORMATS, Done, NeedsInput, PageScanned, Progress, source_kind, init)
 import asyncio
 from contextlib import aclosing
 
 class CLI_APP():
-    def __init__(self):
+    def __init__(self, repository: PrinterRepository | None = None):
+        self.repository = PrinterRepository() if repository is None else repository
         self.current_printer = None
 
-    async def select_printer(self):
-        available_printers = await Printer.discover_printers()
+    def ask_index(self, title, entries):
+        '''Returns the position of the entry the user picks, or None if the user enters nothing.'''
+        print(title)
+        for index, entry in enumerate(entries):
+            print(f"\t[{index}]: {entry}")
 
-        indexed_printers = [f'[{i}]: {name}' for i, name in enumerate(available_printers)]
-
-        print(f"Select printer: \n\t{'\t'.join(indexed_printers)}")
-
-        while selection := input(">> "):
-            if not selection.isdigit():
+        while selection := input(">> ").strip():
+            if not selection.isdecimal():
                 print("Input not numeric!")
                 continue
-            idx = int(selection)
-            if not (0 <= idx < len(available_printers)): 
+            index = int(selection)
+            if not (0 <= index < len(entries)):
                 print("Index out of range!")
                 continue
+            return index
+        return None
 
-            self.current_printer = Printer(Printer.printer_name_from_discovery_line(available_printers[idx]))
-            await self.current_printer.load_options()
-            break
+    async def select_printer(self):
+        '''Makes a saved printer the current one, or leaves it None if the user enters nothing.'''
+        if not self.repository.get_all_printers():
+            print("No saved printers yet.")
+            await self.add_printer()
+        printers = self.repository.get_all_printers()
+        if not printers:
+            return
+
+        index = self.ask_index("Select printer (Enter to quit):", [printer.device for printer in printers])
+        if index is None:
+            return
+
+        printer = printers[index]
+        print("Checking the printer ...")
+        if not await printer.is_available():
+            print(f"Warning: '{printer.device}' is not available right now, scanning may fail")
+        self.current_printer = printer
+
+    async def add_printer(self):
+        '''Saves one of the discovered printers that isn't saved yet.'''
+        print("Looking for printers, this can take a while ...")
+        try:
+            lines = await Printer.discover_printers()
+        except RuntimeError as error:
+            print(error)
+            return
+
+        saved = {printer.device for printer in self.repository.get_all_printers()}
+        found = {}
+        for line in lines:
+            try:
+                device = Printer.printer_name_from_discovery_line(line)
+            except RuntimeError:    # not a device, e.g. 'No scanners were identified'
+                continue
+            if device not in saved:
+                found[device] = line.strip()
+        if not found:
+            print("No new printers found")
+            return
+
+        index = self.ask_index("Add printer (Enter to go back):", list(found.values()))
+        if index is None:
+            return
+
+        printer = Printer(list(found)[index])
+        try:
+            await printer.load_options()
+        except RuntimeError as error:
+            print(error)
+            return
+        self.repository.add_printer(printer)
+        print(f"Added '{printer.device}'")
+
+    def delete_printer(self):
+        device = self.current_printer.device
+        if self.ask_yes_no(f"Delete '{device}' and its saved options?", False):
+            self.repository.remove_printer(device)
+            self.current_printer = None
 
     def display_printer_options(self):
         printer = self.current_printer
@@ -36,7 +95,7 @@ class CLI_APP():
                 print('\t', option)
 
     def configure_printer(self):
-        '''Changes options with '<option> <new_value>' until the user enters nothing.'''
+        '''Changes and saves options with '<option> <new_value>' until the user enters nothing.'''
         while True:
             self.display_printer_options()
             entry = input("<option> <new_value> (Enter to finish) >> ").strip()
@@ -55,6 +114,7 @@ class CLI_APP():
                     self.current_printer.select_source(value)
                 else:
                     self.current_printer.set_option(name, value)
+                self.repository.update_printer(self.current_printer)
             except ValueError as error:
                 print(error)
 
@@ -78,33 +138,28 @@ class CLI_APP():
 
     def choose_scan(self):
         '''
-        Returns the scan for the current configuration, or None if the user enters nothing. The source
-        decides how it scans; the user only chooses if the source is not a known one.
+        Returns the scan for the current configuration. The source decides how it scans; the user only
+        chooses if the source is not a known one, and gets None back by entering nothing there.
         '''
         printer = self.current_printer
         kind = source_kind(printer.source)
-        print(f"Scan from '{printer.source}' (this first empties '{SCAN_FOLDER_DEFAULT}'), Enter to quit: ")
+        print(f"Scan from '{printer.source}' (this first empties '{SCAN_FOLDER_DEFAULT}')")
+        selection = None
         if kind is None:
             print("\t[0]: one page at a time\t[1]: everything in the source")
-            choices = ('0', '1')
-        else:
-            print("\t[s]: start scanning")
-            choices = ('s',)
-
-        while selection := input(">> ").strip().lower():
-            if selection not in choices:
+            while (selection := input("(Enter to go back) >> ").strip().lower()) not in ('0', '1'):
+                if not selection:
+                    return None
                 print("Invalid choice!")
-                continue
 
-            output_format = self.ask_output_format()
-            is_pdf = output_format == 'pdf'     # only pdf pages can be combined
-            # same defaults as the printer: separate pages one at a time, one document for a stack
-            one_at_a_time = kind == 'flatbed' or selection == '0'
-            combine = is_pdf and self.ask_yes_no("Combine the pages into one document?", not one_at_a_time)
-            two_sided = kind == 'document-feeder' and self.ask_yes_no("Scan both sides?", False)
-            return printer.scan(one_at_a_time=(selection == '0') if kind is None else None,
-                                combine=combine, output_format=output_format, two_sided=two_sided)
-        return None
+        output_format = self.ask_output_format()
+        is_pdf = output_format == 'pdf'     # only pdf pages can be combined
+        # same defaults as the printer: separate pages one at a time, one document for a stack
+        one_at_a_time = kind == 'flatbed' or selection == '0'
+        combine = is_pdf and self.ask_yes_no("Combine the pages into one document?", not one_at_a_time)
+        two_sided = kind == 'document-feeder' and self.ask_yes_no("Scan both sides?", False)
+        return printer.scan(one_at_a_time=(selection == '0') if kind is None else None,
+                            combine=combine, output_format=output_format, two_sided=two_sided)
 
     def handle_event(self, event):
         '''Shows an event of the scan, and returns the answer to send back if it asks for one.'''
@@ -132,21 +187,46 @@ class CLI_APP():
             except (RuntimeError, ValueError) as error:
                 print(f"\nScan failed: {error}")
 
-    async def run(self):
-        await self.select_printer()
-        if self.current_printer is None:
+    async def scan(self):
+        try:
+            scan = self.choose_scan()
+        except ValueError as error:
+            print(error)
             return
-
-        while True:
-            self.configure_printer()
-            try:
-                scan = self.choose_scan()
-            except ValueError as error:
-                print(error)
-                continue
-            if scan is None:
-                break
+        if scan is not None:
             await self.run_scan(scan)
+
+    async def printer_menu(self):
+        '''Asks what to do with the current printer and does it. Returns False if the user wants to quit.'''
+        printer = self.current_printer
+        print(f"\nPrinter: {printer.device}, source: {printer.source}")
+        print("\t[1]: add new printer\n\t[2]: change printer\n\t[3]: configure scanner\n\t[4]: scan\n\t[5/d]: delete this printer")
+        match input("(Enter to quit) >> ").strip().lower():
+            case '':
+                return False
+            case '1':
+                await self.add_printer()
+            case '2':
+                self.current_printer = None
+            case '3':
+                self.configure_printer()
+            case '4':
+                await self.scan()
+            case '5' | 'd':
+                self.delete_printer()
+            case _:
+                print("Invalid choice!")
+        return True
+
+    async def run(self):
+        await init()
+        while True:
+            if self.current_printer is None:
+                await self.select_printer()
+                if self.current_printer is None:
+                    return
+            if not await self.printer_menu():
+                return
 
 
 if __name__ == '__main__':

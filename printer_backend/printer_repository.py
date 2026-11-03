@@ -26,6 +26,7 @@ class PrinterRepository():
     def _save(self):
         # written next to the file and moved over it: a crash can't leave half of a file behind
         temporary = f'{self.path}.tmp'
+        os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
         with open(temporary, 'w', encoding='utf-8') as file:
             json.dump([printer.to_dict() for printer in self.printers.values()], file, indent=2)
         os.replace(temporary, self.path)

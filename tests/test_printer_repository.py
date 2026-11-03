@@ -93,6 +93,11 @@ class PrinterRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.repository.add_printer(make_printer())
         self.assertEqual(self.reopened().get_printer('dev').options, make_printer().options)
 
+    def test_add_creates_the_folder(self):
+        path = os.path.join(os.path.dirname(self.path), 'data', 'printers.json')
+        PrinterRepository(path).add_printer(make_printer())
+        self.assertEqual(PrinterRepository(path).get_printer('dev').options, make_printer().options)
+
     def test_add_twice_is_refused(self):
         self.repository.add_printer(make_printer())
         with self.assertRaises(ValueError):

@@ -55,7 +55,7 @@ The bracketed value after the allowed values is stored in both `value` and `defa
 
 ## Saving printers
 
-`PrinterRepository` keeps printers in a JSON file (`./printers.json` by default), using `Printer.to_dict` and `Printer.from_dict`. Every change is written straight away.
+`PrinterRepository` keeps printers in a JSON file (`./data/printers.json` by default), using `Printer.to_dict` and `Printer.from_dict`. Every change is written straight away.
 
 ```python
 repository = PrinterRepository()
