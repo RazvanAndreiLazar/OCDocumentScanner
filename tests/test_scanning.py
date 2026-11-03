@@ -92,7 +92,8 @@ class FakeProcess():
 
 class FakeSystem():
     '''Stands in for scanimage and img2pdf: records the calls and creates the files they would write.'''
-    def __init__(self, pages_per_batch=2, fail_with=None, endless=False):
+    def __init__(self, pages_per_batch=2, fail_with=None, endless=False, open_failures=0):
+        self.open_failures = open_failures
         self.calls = []
         self.processes = []
         self.pages_per_batch = pages_per_batch
@@ -101,33 +102,42 @@ class FakeSystem():
 
     @staticmethod
     def write(path):
-        Path(path).write_bytes(b'x')
+        Path(path).write_text(os.path.basename(path))   # the name it was written with, to follow renames
 
     async def __call__(self, *args, **kwargs):
         self.calls.append(list(args))
+        if args[0] == 'scanimage' and self.open_failures:
+            self.open_failures -= 1
+            return FakeProcess(b'scanimage: open of device dev failed: Invalid argument', returncode=1)
+        no_documents = False
         if args[0] == 'scanimage':
-            self.scanimage(args)
+            no_documents = self.scanimage(args)
         else:
             self.write(args[args.index('-o') + 1])
         if self.fail_with and args[0] == self.fail_with:
             process = FakeProcess(b'it broke', returncode=1)
+        elif no_documents:
+            process = FakeProcess(b'Document feeder out of documents', returncode=7)
         else:
             process = FakeProcess(endless=self.endless)
         self.processes.append(process)
         return process
 
     def scanimage(self, args):
+        '''Returns True if it exits with 'no documents', like the real one: see the n > batch_start_at check in scanimage.c'''
         if '-o' in args:
             self.write(args[args.index('-o') + 1])
         batch = next((arg.split('=', 1)[1] for arg in args if arg.startswith('--batch=')), None)
         if batch is None:
-            return
+            return False
         if '%' not in batch:
-            return self.write(batch)
+            self.write(batch)
+            return False
         value = lambda name, default: int(next((a.split('=')[1] for a in args if a.startswith(name)), default))
         start, increment = value('--batch-start=', 1), value('--batch-increment=', 1)
         for i in range(self.pages_per_batch):
             self.write(batch % (start + i * increment))
+        return self.pages_per_batch == 0 or increment < 0
 
     def of(self, program):
         return [call for call in self.calls if call[0] == program]
@@ -153,6 +163,9 @@ class ScanTestCase(unittest.IsolatedAsyncioTestCase):
         patch = mock.patch.object(printer_module, 'SCAN_FOLDER_DEFAULT', self.folder)
         patch.start()
         self.addCleanup(patch.stop)
+        delay = mock.patch.object(printer_module, 'OPEN_RETRY_DELAY', 0)
+        delay.start()
+        self.addCleanup(delay.stop)
 
         self.printer = Printer('dev')
         self.printer.options = {
@@ -171,6 +184,10 @@ class ScanTestCase(unittest.IsolatedAsyncioTestCase):
 
     def path(self, name):
         return os.path.join(self.folder, name)
+
+    def use_source(self, source):
+        self.printer.options.setdefault(source, self.printer.options['ADF'])
+        self.printer.select_source(source)
 
     def files(self):
         return sorted(os.listdir(self.folder))
@@ -192,11 +209,11 @@ class FolderTest(ScanTestCase):
         os.makedirs(self.folder)
         self.system.write(self.path('scan007.png'))
         self.system.write(self.path('notes.txt'))
-        await drive(self.printer.scan_all())
+        await drive(self.printer.scan_one_at_a_time(count=1, combine=True))
         self.assertEqual(self.files(), ['scan001.png', 'test.pdf'])
 
     async def test_nothing_is_cleaned_after_the_scan(self):
-        await drive(self.printer.scan_all())
+        await drive(self.printer.scan_one_at_a_time(count=1, combine=True))
         self.assertEqual(self.files(), ['scan001.png', 'test.pdf'])
 
 
@@ -224,9 +241,9 @@ class ScanArgsTest(ScanTestCase):
 
 
 class FlatbedTest(ScanTestCase):
-    async def test_scan_all_scans_one_page(self):
+    async def test_one_page(self):
         self.printer.set_option('resolution', 300)
-        events = await drive(self.printer.scan_all())
+        events = await drive(self.printer.scan_one_at_a_time(count=1, combine=True))
 
         page, document = self.path('scan001.png'), self.path('test.pdf')
         self.assertEqual([e for e in events if not isinstance(e, Progress)],
@@ -237,13 +254,8 @@ class FlatbedTest(ScanTestCase):
         self.assertEqual(self.system.of('img2pdf'), [['img2pdf', page, '-o', document]])
 
     async def test_progress_is_yielded_not_printed(self):
-        events = await drive(self.printer.scan_all())
+        events = await drive(self.printer.scan_one_at_a_time(count=1))
         self.assertIn(Progress('progress\r'), events)
-
-    async def test_two_sided_has_no_effect(self):
-        events = await drive(self.printer.scan_all(two_sided=True))
-        self.assertFalse([e for e in events if isinstance(e, NeedsInput)])
-        self.assertEqual(len(self.system.of('scanimage')), 1)
 
 
 class OneAtATimeTest(ScanTestCase):
@@ -302,11 +314,29 @@ class FeederTest(ScanTestCase):
         self.assertEqual(seen, [1])     # asked after the fronts, before the backs
         fronts, backs = self.system.of('scanimage')
         self.assertEqual(fronts[-3:], [f'--batch={self.path("scan%03d.png")}', '--batch-start=1', '--batch-increment=2'])
-        # 2 sheets: the backs are 4 and 2, the flipped stack feeds the last one first
-        self.assertEqual(backs[-3:], [f'--batch={self.path("scan%03d.png")}', '--batch-start=4', '--batch-increment=-2'])
+        # 2 sheets: the flipped stack feeds the last one first, so the first back is page 4
+        self.assertEqual(Path(self.path('scan004.png')).read_text(), 'back001.png')
+        self.assertEqual(Path(self.path('scan002.png')).read_text(), 'back002.png')
+        self.assertFalse([name for name in self.files() if name.startswith('back')])
+        self.assertEqual(backs[-1], f'--batch={self.path("back%03d.png")}')
         self.assertEqual([e.number for e in events if isinstance(e, PageScanned)], [1, 2, 3, 4])
         self.assertEqual(self.system.of('img2pdf'),
                          [['img2pdf', *[self.path(f'scan00{i}.png') for i in (1, 2, 3, 4)], '-o', self.path('test.pdf')]])
+
+    async def test_fewer_backs_than_fronts(self):
+        def one_page_left(event):
+            self.system.pages_per_batch = 1
+
+        with self.assertRaisesRegex(RuntimeError, '2 front sides but 1 back sides'):
+            await drive(self.printer.scan_all(two_sided=True), one_page_left)
+        self.assertFalse(self.system.of('img2pdf'))
+
+    async def test_empty_feeder_for_the_backs(self):
+        def empty(event):
+            self.system.pages_per_batch = 0
+
+        with self.assertRaisesRegex(RuntimeError, r'scanimage failed \(7\)'):
+            await drive(self.printer.scan_all(two_sided=True), empty)
 
     async def test_the_options_of_the_source_are_used(self):
         self.printer.set_option('resolution', 300)
@@ -346,20 +376,131 @@ class DuplexTest(ScanTestCase):
         self.assertEqual(events[-1], Done([self.path('scan001.pdf'), self.path('scan002.pdf')]))
 
 
+class SourceGuardTest(ScanTestCase):
+    def test_scan_all_rejects_a_flatbed(self):
+        with self.assertRaisesRegex(ValueError, "'Flatbed' holds one page at a time"):
+            self.printer.scan_all()
+        self.assertEqual(self.system.calls, [])
+
+    def test_one_at_a_time_rejects_feeders(self):
+        for source in ('ADF', 'ADF Duplex', 'Automatic Document Feeder'):
+            with self.subTest(source):
+                self.use_source(source)
+                with self.assertRaisesRegex(ValueError, 'feeds the whole stack'):
+                    self.printer.scan_one_at_a_time()
+        self.assertEqual(self.system.calls, [])
+
+    def test_a_rejected_scan_does_not_empty_the_folder(self):
+        os.makedirs(self.folder)
+        self.system.write(self.path('scan001.png'))
+        with self.assertRaises(ValueError):
+            self.printer.scan_all()
+        self.assertEqual(self.files(), ['scan001.png'])
+
+    async def test_unknown_source_can_use_both(self):
+        self.use_source('Tray 2')
+        events = await drive(self.printer.scan_one_at_a_time(count=1))
+        self.assertEqual(events[-1], Done([self.path('scan001.pdf')]))
+        events = await drive(self.printer.scan_all())
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+
+
+class ScanDispatchTest(ScanTestCase):
+    async def test_flatbed_scans_one_at_a_time(self):
+        answers = iter([True, False])
+        events = await drive(self.printer.scan(), lambda event: next(answers))
+        self.assertEqual([e.number for e in events if isinstance(e, PageScanned)], [1, 2])
+        # combine defaults to what scan_one_at_a_time defaults to
+        self.assertEqual(events[-1], Done([self.path('scan001.pdf'), self.path('scan002.pdf')]))
+
+    async def test_flatbed_arguments(self):
+        events = await drive(self.printer.scan(count=2, combine=True, two_sided=True), lambda event: True)
+        self.assertEqual([e.number for e in events if isinstance(e, PageScanned)], [1, 2])
+        self.assertFalse([e for e in events if isinstance(e, NeedsInput) and e.kind == FLIP])
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+
+    async def test_feeder_scans_the_stack(self):
+        self.use_source('ADF')
+        events = await drive(self.printer.scan(two_sided=True))
+        self.assertIn(NeedsInput(FLIP), events)
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+
+    async def test_duplex_scans_the_stack(self):
+        self.use_source('ADF Duplex')
+        events = await drive(self.printer.scan())
+        self.assertEqual(len(self.system.of('scanimage')), 1)
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+
+    def test_unknown_source_has_to_choose(self):
+        self.use_source('Tray 2')
+        with self.assertRaisesRegex(ValueError, 'choose how to scan'):
+            self.printer.scan()
+
+    async def test_unknown_source_chooses(self):
+        self.use_source('Tray 2')
+        await drive(self.printer.scan(one_at_a_time=True, count=1))
+        self.assertIn('-o', self.system.of('scanimage')[-1])
+        events = await drive(self.printer.scan(one_at_a_time=False))
+        self.assertTrue([arg for arg in self.system.of('scanimage')[-1] if arg.startswith('--batch=')])
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+
+    def test_the_choice_cannot_overrule_a_known_source(self):
+        with self.assertRaises(ValueError):
+            self.printer.scan(one_at_a_time=False)
+        self.use_source('ADF')
+        with self.assertRaises(ValueError):
+            self.printer.scan(one_at_a_time=True)
+
+
 class ProblemsTest(ScanTestCase):
+    def setUp(self):
+        super().setUp()
+        self.printer.select_source('ADF')
+
     def test_arguments_are_checked_when_called(self):
         for call in (lambda: self.printer.scan_all(output_format='bmp'),
-                     lambda: self.printer.scan_all(combine=True, output_format='png'),
-                     lambda: self.printer.scan_one_at_a_time(combine=True, output_format='tiff'),
+                     lambda: self.printer.scan_all(combine=True, output_format='png')):
+            with self.assertRaisesRegex(ValueError, 'format|combined'):
+                call()
+        self.printer.select_source('Flatbed')
+        for call in (lambda: self.printer.scan_one_at_a_time(combine=True, output_format='tiff'),
                      lambda: self.printer.scan_one_at_a_time(count=0),
                      lambda: self.printer.scan_one_at_a_time(count=-1)):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, 'combined|count'):
                 call()
 
     async def test_failing_command(self):
         self.system = self.fake_system(fail_with='scanimage')
         with self.assertRaisesRegex(RuntimeError, 'scanimage failed.*it broke'):
             await drive(self.printer.scan_all())
+
+    async def test_other_failures_are_not_tried_again(self):
+        self.system = self.fake_system(fail_with='scanimage')
+        with self.assertRaises(RuntimeError):
+            await drive(self.printer.scan_all())
+        self.assertEqual(len(self.system.of('scanimage')), 1)
+
+    async def test_device_that_does_not_open_is_tried_again(self):
+        self.system = self.fake_system(open_failures=scanning.OPEN_ATTEMPTS - 1)
+        events = await drive(self.printer.scan_all())
+        self.assertEqual(len(self.system.of('scanimage')), scanning.OPEN_ATTEMPTS)
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+
+    async def test_device_that_never_opens(self):
+        self.system = self.fake_system(open_failures=scanning.OPEN_ATTEMPTS)
+        with self.assertRaisesRegex(RuntimeError, 'open of device'):
+            await drive(self.printer.scan_all())
+        self.assertEqual(len(self.system.of('scanimage')), scanning.OPEN_ATTEMPTS)
+
+    async def test_backs_survive_a_device_that_does_not_open(self):
+        self.printer.select_source('ADF')
+
+        def fail_next_open(event):
+            self.system.open_failures = 1
+
+        events = await drive(self.printer.scan_all(two_sided=True), fail_next_open)
+        self.assertEqual(events[-1], Done([self.path('test.pdf')]))
+        self.assertEqual([e.number for e in events if isinstance(e, PageScanned)], [1, 2, 3, 4])
 
     async def test_failing_conversion(self):
         self.system = self.fake_system(fail_with='img2pdf')
@@ -369,7 +510,7 @@ class ProblemsTest(ScanTestCase):
     async def test_nothing_scanned(self):
         self.system = self.fake_system(pages_per_batch=0)
         self.printer.select_source('ADF')
-        with self.assertRaisesRegex(RuntimeError, 'Nothing was scanned'):
+        with self.assertRaisesRegex(RuntimeError, r'scanimage failed \(7\)'):
             await drive(self.printer.scan_all())
 
     async def test_missing_program(self):
@@ -386,6 +527,7 @@ class ProblemsTest(ScanTestCase):
         self.assertTrue(self.system.processes[0].terminated)
 
     async def test_closing_while_waiting_for_the_user(self):
+        self.printer.select_source('Flatbed')
         gen = self.printer.scan_one_at_a_time()
         events = []
         async for event in gen:

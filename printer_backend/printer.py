@@ -8,7 +8,7 @@ import re
 import shutil
 from printer_backend.options import ScanOption, parse_help
 from printer_backend.scanning import (
-    DEFAULT_FILE, FLIP, NEXT_PAGE, PAGE_FORMAT, PAGE_PREFIX, SCAN_FOLDER_DEFAULT, SCAN_FORMATS,
+    BACK_PREFIX, DEFAULT_FILE, FLIP, OPEN_ATTEMPTS, OPEN_RETRY_DELAY, NEXT_PAGE, PAGE_FORMAT, PAGE_PREFIX, SCAN_FOLDER_DEFAULT, SCAN_FORMATS,
     Done, NeedsInput, PageScanned, Progress, run_command, source_kind)
 
 NO_SOURCE = ''    # key used for devices that have no 'source' option
@@ -72,10 +72,10 @@ class Printer():
         self.source = source.value if source.value in self.options else source.choices[0]
 
     ######################### SCANNING ######################
-    # scan_all / scan_one_at_a_time don't talk to the user: they are async generators that yield
-    # events (see scanning.py) and get the answers back with asend():
+    # scan picks scan_one_at_a_time or scan_all from the source. They don't talk to the user: they are
+    # async generators that yield events (see scanning.py) and get the answers back with asend():
     #
-    #   gen = printer.scan_all(two_sided=True)
+    #   gen = printer.scan(two_sided=True)
     #   event = await anext(gen)
     #   while True:
     #       reply = None
@@ -102,11 +102,41 @@ class Printer():
         if combine and output_format != 'pdf':
             raise ValueError("Only pdf formats can be combined")
 
+    def _check_source_supports(self, one_at_a_time: bool):
+        '''A flatbed holds one page at a time and a feeder takes the whole stack; unknown sources can do either.'''
+        kind = source_kind(self.source)
+        if kind is None:
+            return
+        if one_at_a_time and kind != 'flatbed':
+            raise ValueError(f"Source '{self.source}' feeds the whole stack, it can't scan one page at a time")
+        if not one_at_a_time and kind == 'flatbed':
+            raise ValueError(f"Source '{self.source}' holds one page at a time, it can't scan a whole stack")
+
+    def scan(self, one_at_a_time: bool | None = None, count: int | None = None, combine: bool | None = None,
+             output_format='pdf', two_sided=False) -> AsyncGenerator:
+        '''
+        Scans in the way the current source works: scan_one_at_a_time for a flatbed, scan_all for a
+        feeder or duplex. An unknown source has to say which one with one_at_a_time.
+        count only applies to scanning one at a time and two_sided to a feeder; they are ignored otherwise.
+        combine defaults to what the chosen method defaults to.
+        '''
+        if one_at_a_time is None:
+            kind = source_kind(self.source)
+            if kind is None:
+                raise ValueError(f"Source '{self.source}' is not known, choose how to scan it with one_at_a_time")
+            one_at_a_time = kind == 'flatbed'
+
+        if one_at_a_time:
+            return self.scan_one_at_a_time(count, False if combine is None else combine, output_format)
+        return self.scan_all(True if combine is None else combine, output_format, two_sided)
+
     def scan_one_at_a_time(self, count: int | None = None, combine=False, output_format='pdf') -> AsyncGenerator:
         '''
         Scans one page at a time from the current source, yielding NeedsInput(NEXT_PAGE) before every
         page after the first one. Stops after 'count' pages, or when the reply is not True if count is None.
+        Raises ValueError if the source is a feeder or duplex.
         '''
+        self._check_source_supports(one_at_a_time=True)
         self._check_scan_arguments(combine, output_format)
         if count is not None and count < 1:
             raise ValueError("count must be at least 1, or None to scan until stopped")
@@ -114,23 +144,32 @@ class Printer():
 
     def scan_all(self, combine=True, output_format='pdf', two_sided=False) -> AsyncGenerator:
         '''
-        Scans whatever the current source is made for: a page from the flatbed, the stack of the document
-        feeder (yielding NeedsInput(FLIP) between the sides if two_sided) or both sides of the stack
-        with a duplex source (two_sided has no effect there, or on the flatbed).
+        Scans the whole stack: the document feeder (yielding NeedsInput(FLIP) between the sides if two_sided)
+        or both sides with a duplex source (two_sided has no effect there). Raises ValueError if the source is a flatbed.
         '''
+        self._check_source_supports(one_at_a_time=False)
         self._check_scan_arguments(combine, output_format)
-        mode = {'flatbed': ONE_AT_A_TIME, 'document-feeder': FEEDER, 'duplex': DUPLEX}.get(source_kind(self.source), UNKNOWN)
-        return self._scan(mode, 1 if mode == ONE_AT_A_TIME else None, combine, output_format, two_sided)
+        mode = {'document-feeder': FEEDER, 'duplex': DUPLEX}.get(source_kind(self.source), UNKNOWN)
+        return self._scan(mode, None, combine, output_format, two_sided)
 
-    def _pages(self, page_format: str) -> list[str]:
+    def _pages(self, page_format: str, prefix=PAGE_PREFIX) -> list[str]:
         # zero-padded numbers: the sorted names are in page order
-        return sorted(glob.glob(os.path.join(SCAN_FOLDER_DEFAULT, f'{PAGE_PREFIX}*.{page_format}')))
+        return sorted(glob.glob(os.path.join(SCAN_FOLDER_DEFAULT, f'{prefix}*.{page_format}')))
 
     async def _scanimage(self, *args) -> AsyncGenerator:
-        command = run_command('scanimage', '-d', self.device, *self.to_args(), *args)
-        async with aclosing(command) as events:
-            async for event in events:
-                yield event
+        for attempt in range(1, OPEN_ATTEMPTS + 1):
+            command = run_command('scanimage', '-d', self.device, *self.to_args(), *args)
+            try:
+                async with aclosing(command) as events:
+                    async for event in events:
+                        yield event
+                return
+            except RuntimeError as error:
+                # nothing was scanned if the device didn't open, so it is safe to try again
+                if 'open of device' not in str(error) or attempt == OPEN_ATTEMPTS:
+                    raise
+            yield Progress(f"Could not open the device, trying again in {OPEN_RETRY_DELAY} s ({attempt}/{OPEN_ATTEMPTS - 1})\n")
+            await asyncio.sleep(OPEN_RETRY_DELAY)
 
     async def _scan(self, mode, count, combine, output_format, two_sided=False) -> AsyncGenerator:
         await self.clean_scans_folder()
@@ -171,12 +210,20 @@ class Printer():
                     yield event
             if two_sided:
                 yield NeedsInput(FLIP)
-                # the flipped stack feeds the last sheet's back first, so count down from the last page number
-                sheets = len(self._pages(page_format))
-                async with aclosing(self._scanimage('--format', page_format, '-p', f'--batch={batch}',
-                                                   f'--batch-start={2 * sheets}', '--batch-increment=-2')) as events:
+                # numbered upwards and renamed afterwards: with a negative --batch-increment, scanimage
+                # exits with an error when the feeder runs out, however many pages it scanned
+                backs = os.path.join(SCAN_FOLDER_DEFAULT, f'{BACK_PREFIX}%03d.{page_format}')
+                async with aclosing(self._scanimage('--format', page_format, '-p', f'--batch={backs}')) as events:
                     async for event in events:
                         yield event
+                sheets = len(self._pages(page_format))
+                scanned_backs = self._pages(page_format, BACK_PREFIX)
+                if len(scanned_backs) != sheets:
+                    raise RuntimeError(f"Scanned {sheets} front sides but {len(scanned_backs)} back sides, "
+                                       f"the pages are in '{SCAN_FOLDER_DEFAULT}'")
+                # the flipped stack feeds the last sheet's back first: the first back is the last page
+                for index, path in enumerate(scanned_backs):
+                    os.rename(path, batch % (2 * (sheets - index)))
             for number, path in enumerate(self._pages(page_format), 1):
                 yield PageScanned(path, number)
 

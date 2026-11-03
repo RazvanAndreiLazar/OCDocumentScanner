@@ -8,9 +8,12 @@ import sys
 
 DEFAULT_FILE = 'test'
 PAGE_PREFIX = 'scan'
+BACK_PREFIX = 'back'     # the back sides of a two-sided scan, until they get their page number
 PAGE_FORMAT = 'png'
 
 SCANIMG_VERSION = '1.2.1'
+OPEN_ATTEMPTS = 4         # airscan sometimes can't open the device, the next try usually can
+OPEN_RETRY_DELAY = 3      # seconds
 SCAN_FORMATS = ('tiff', 'pnm', 'png', 'jpeg', 'pdf')
 SCAN_FOLDER_DEFAULT = './scans'
 SCAN_KNOWN_KEYWORDS = {
