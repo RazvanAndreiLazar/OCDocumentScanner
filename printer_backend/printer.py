@@ -1,14 +1,15 @@
 import asyncio
 from asyncio import subprocess
 from collections.abc import AsyncGenerator
-from contextlib import aclosing
+from contextlib import aclosing, suppress
+from dataclasses import asdict
 import glob
 import os
 import re
 import shutil
 from printer_backend.options import ScanOption, parse_help
 from printer_backend.scanning import (
-    BACK_PREFIX, DEFAULT_FILE, FLIP, OPEN_ATTEMPTS, OPEN_RETRY_DELAY, NEXT_PAGE, PAGE_FORMAT, PAGE_PREFIX, SCAN_FOLDER_DEFAULT, SCAN_FORMATS,
+    AVAILABLE_TIMEOUT, BACK_PREFIX, DEFAULT_FILE, FLIP, KILL_WAIT, OPEN_ATTEMPTS, OPEN_FAILED, OPEN_RETRY_DELAY, NEXT_PAGE, PAGE_FORMAT, PAGE_PREFIX, SCAN_FOLDER_DEFAULT, SCAN_FORMATS,
     Done, NeedsInput, PageScanned, Progress, run_command, source_kind)
 
 NO_SOURCE = ''    # key used for devices that have no 'source' option
@@ -35,6 +36,38 @@ class Printer():
     def current_options(self) -> dict[str, ScanOption]:
         return self.options_of(self.source)
 
+    def to_dict(self) -> dict:
+        '''The printer as plain data that json.dumps accepts. from_dict turns it back into a Printer.'''
+        return {
+            'device': self.device,
+            'source': self.source,
+            'options': {source: {name: asdict(option) for name, option in options.items()}
+                        for source, options in self.options.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Printer':
+        printer = cls(data['device'])
+        printer.options = {source: {name: ScanOption(**option) for name, option in options.items()}
+                           for source, options in data['options'].items()}
+        printer.source = data['source']
+        return printer
+
+    async def is_available(self) -> bool:
+        '''Whether the device responds, trying again like a scan does and giving up after AVAILABLE_TIMEOUT seconds.'''
+        try:
+            async with asyncio.timeout(AVAILABLE_TIMEOUT):
+                for attempt in range(1, OPEN_ATTEMPTS + 1):
+                    try:
+                        await self._load_options_per_source()
+                        return True
+                    except RuntimeError as error:
+                        if OPEN_FAILED not in str(error) or attempt == OPEN_ATTEMPTS:
+                            return False
+                    await asyncio.sleep(OPEN_RETRY_DELAY)
+        except TimeoutError:
+            return False
+
     def select_source(self, source: str):
         self.options_of(source)     # raises ValueError if the device has no such source
         self.source = source
@@ -51,7 +84,15 @@ class Printer():
         proc = await asyncio.create_subprocess_exec('scanimage', '-d', self.device, *args, '-A',
                                                     stderr=subprocess.PIPE,
                                                     stdout=subprocess.PIPE)
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await proc.communicate()
+        finally:
+            # cancelled (e.g. by a timeout): kill, because a stuck scanimage may not react to terminate
+            if proc.returncode is None:
+                proc.kill()
+                # limited: wait() also waits for the pipes, which a child of scanimage may still hold
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(proc.wait(), KILL_WAIT)
         if proc.returncode != 0:
             raise RuntimeError(f'Reading options failed (Err Code: {proc.returncode})\n'
                                f'{stderr.decode(errors="replace")}')
@@ -166,7 +207,7 @@ class Printer():
                 return
             except RuntimeError as error:
                 # nothing was scanned if the device didn't open, so it is safe to try again
-                if 'open of device' not in str(error) or attempt == OPEN_ATTEMPTS:
+                if OPEN_FAILED not in str(error) or attempt == OPEN_ATTEMPTS:
                     raise
             yield Progress(f"Could not open the device, trying again in {OPEN_RETRY_DELAY} s ({attempt}/{OPEN_ATTEMPTS - 1})\n")
             await asyncio.sleep(OPEN_RETRY_DELAY)
@@ -245,14 +286,15 @@ class Printer():
                         yield event
         yield Done(files)
 
-    def validate(self, settings: dict):
-        options = self.current_options
+    def validate(self, settings: dict, source: str | None = None):
+        source = self.source if source is None else source
+        options = self.options_of(source)
         for name, value in settings.items():
             if name == 'source':
                 raise ValueError("The source is a separate argument, not a setting")
             option = options.get(name)
             if option is None:
-                raise ValueError(f"'{self.device}' has no option '{name}' for source '{self.source}'")
+                raise ValueError(f"'{self.device}' has no option '{name}' for source '{source}'")
             if not option.active:
                 raise ValueError(f"Option '{name}' is not available with the current settings")
             if not option.accepts(value):
@@ -262,8 +304,18 @@ class Printer():
 
     def set_option(self, name: str, value):
         '''Changes the value of an option of the current source, raising ValueError if the device doesn't accept it.'''
-        self.validate({name: value})
-        self.current_options[name].value = str(value)
+        self.set_options({name: value})
+
+    def set_options(self, settings: dict, source: str | None = None):
+        '''
+        Changes several options of a source (the current one by default), without selecting it.
+        Raises ValueError and changes nothing if the device doesn't accept one of them.
+        '''
+        source = self.source if source is None else source
+        self.validate(settings, source)
+        options = self.options_of(source)
+        for name, value in settings.items():
+            options[name].value = str(value)
 
     def to_args(self) -> list[str]:
         '''

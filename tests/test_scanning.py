@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import io
 import os
@@ -545,6 +546,73 @@ class SourceKindTest(unittest.TestCase):
                              ('ADF Duplex', 'duplex'), ('Tray 2', None), ('', None)):
             with self.subTest(source):
                 self.assertEqual(scanning.source_kind(source), kind)
+
+
+
+class IsAvailableTest(unittest.IsolatedAsyncioTestCase):
+    OPEN_ERROR = b"scanimage: open of device dev failed: Invalid argument\n"
+
+    def setUp(self):
+        delay = mock.patch.object(printer_module, 'OPEN_RETRY_DELAY', 0)
+        delay.start()
+        self.addCleanup(delay.stop)
+
+    def fake_runs(self, *errors):
+        '''One scanimage per entry: None responds, anything else fails with that on stderr.'''
+        procs = []
+        for error in errors:
+            proc = mock.Mock(returncode=0 if error is None else 1)
+            proc.communicate = mock.AsyncMock(return_value=(b'', error or b''))
+            procs.append(proc)
+        run = mock.AsyncMock(side_effect=procs)
+        patch = mock.patch.object(printer_module.asyncio, 'create_subprocess_exec', run)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return run
+
+    async def test_responds(self):
+        run = self.fake_runs(None)
+        self.assertTrue(await Printer('dev').is_available())
+        self.assertEqual(run.await_count, 1)
+
+    async def test_open_is_tried_again(self):
+        run = self.fake_runs(self.OPEN_ERROR, self.OPEN_ERROR, None)
+        self.assertTrue(await Printer('dev').is_available())
+        self.assertEqual(run.await_count, 3)
+
+    async def test_gives_up_after_all_attempts(self):
+        run = self.fake_runs(*[self.OPEN_ERROR] * scanning.OPEN_ATTEMPTS)
+        self.assertFalse(await Printer('dev').is_available())
+        self.assertEqual(run.await_count, scanning.OPEN_ATTEMPTS)
+
+    async def test_other_errors_are_not_tried_again(self):
+        run = self.fake_runs(b'scanimage: something else\n')
+        self.assertFalse(await Printer('dev').is_available())
+        self.assertEqual(run.await_count, 1)
+
+    async def test_stuck_scanimage_is_killed(self):
+        async def never_answers():
+            await asyncio.Event().wait()
+
+        proc = mock.Mock(returncode=None, communicate=never_answers, wait=mock.AsyncMock())
+        run = mock.AsyncMock(return_value=proc)
+        with mock.patch.object(printer_module.asyncio, 'create_subprocess_exec', run), \
+             mock.patch.object(printer_module, 'AVAILABLE_TIMEOUT', 0.01):
+            self.assertFalse(await Printer('dev').is_available())
+        proc.kill.assert_called_once()
+        proc.wait.assert_awaited_once()
+
+    async def test_killed_scanimage_that_doesnt_finish_is_left_behind(self):
+        async def never_answers():
+            await asyncio.Event().wait()
+
+        proc = mock.Mock(returncode=None, communicate=never_answers, wait=never_answers)
+        run = mock.AsyncMock(return_value=proc)
+        with mock.patch.object(printer_module.asyncio, 'create_subprocess_exec', run), \
+             mock.patch.object(printer_module, 'AVAILABLE_TIMEOUT', 0.01), \
+             mock.patch.object(printer_module, 'KILL_WAIT', 0.01):
+            self.assertFalse(await asyncio.wait_for(Printer('dev').is_available(), 5))
+        proc.kill.assert_called_once()
 
 
 if __name__ == '__main__':

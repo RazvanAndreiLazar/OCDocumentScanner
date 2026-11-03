@@ -7,10 +7,11 @@ The backend does no direct user input or output during a scan. It reports what h
 | File | Contents |
 |---|---|
 | `printer.py` | `Printer`: discovery, per-source options, scan methods |
+| `printer_repository.py` | `PrinterRepository`: saved printers and their options, in a JSON file |
 | `options.py` | `ScanOption` and `parse_help`, the parser for `scanimage` option listings. It runs no commands |
 | `scanning.py` | Constants, scan events, `source_kind`, `run_command`, and the version check `init` |
 
-`printer.py` imports from the other two files, and they don't import it.
+`printer.py` imports from `options.py` and `scanning.py`, and they don't import it. `printer_repository.py` imports `printer.py`.
 
 **Requirements:** `scanimage` from `sane-utils`, and `img2pdf` for PDF output. The code was written against sane-backends 1.2.1.
 
@@ -48,9 +49,36 @@ A `ScanOption` is one of these types:
 
 The bracketed value after the allowed values is stored in both `value` and `default`. Tags such as `[inactive]` and `[advanced]` are not values. `[inactive]` sets `active = False`, and `validate` then refuses the option.
 
-`set_option(name, value)` validates against the current source and then updates `value`. Each source keeps its own values.
+`set_option(name, value)` validates against the current source and then updates `value`. Each source keeps its own values. `set_options(settings, source=None)` does the same for several options, on any source, and changes nothing if one of them is refused.
 
 `to_args()` builds the arguments for a scan: `--source`, plus the active options whose `value` differs from `default`. Unchanged options are deliberately not sent. hpaio lists `-y` as `297.011` but rejects that exact value when it is sent back.
+
+## Saving printers
+
+`PrinterRepository` keeps printers in a JSON file (`./printers.json` by default), using `Printer.to_dict` and `Printer.from_dict`. Every change is written straight away.
+
+```python
+repository = PrinterRepository()
+repository.add_printer(printer)                            # ValueError if already saved
+
+repository.update_options(printer.device, {'resolution': 300, 'mode': 'Gray'})
+repository.update_options(printer.device, {'resolution': 150}, source='ADF')
+
+printer = repository.get_printer(printer.device)           # ValueError if not saved
+printer.select_source('ADF')
+repository.update_printer(printer)
+
+available = await repository.get_available_printers()
+repository.remove_printer(printer.device)
+```
+
+**Why `get_printer` and `update_printer` don't check the device:** saved settings can be read and changed while the scanner is off or busy, because options are validated against the saved `ScanOption`s. Callers that need the device call `await printer.is_available()`. `get_available_printers` is the only repository method that runs `scanimage`.
+
+`is_available` retries a failed open the same way a scan does, and gives up after `AVAILABLE_TIMEOUT` seconds, killing `scanimage` if it is still running. A device that keeps failing to open therefore takes about 9 s (`OPEN_ATTEMPTS` and `OPEN_RETRY_DELAY`) to report `False`. One that doesn't answer takes the full 15 s, as an hpaio address with nothing behind it did.
+
+An airscan device answers even when the name after `airscan:eN:` matches nothing, so a `True` doesn't prove that this exact printer responded.
+
+`get_printer` and `get_all_printers` return the repository's own objects. Changes made directly on one, such as `set_option`, are written to the file by the next save, so call `update_printer` when you make them.
 
 ## Scanning
 
