@@ -1,13 +1,16 @@
 from printer_backend.printer import Printer
 from printer_backend.printer_repository import PrinterRepository
+from printer_backend.settings_repository import SettingsRepository
+from printer_backend.storage import DEFAULT_SCAN_NAME, LocalFolderStorage, check_scan_name
 from printer_backend.scanning import (
     FLIP, SCAN_FOLDER_DEFAULT, SCAN_FORMATS, Done, NeedsInput, PageScanned, Progress, source_kind, init)
 import asyncio
 from contextlib import aclosing
 
 class CLI_APP():
-    def __init__(self, repository: PrinterRepository | None = None):
+    def __init__(self, repository: PrinterRepository | None = None, settings: SettingsRepository | None = None):
         self.repository = PrinterRepository() if repository is None else repository
+        self.settings = SettingsRepository() if settings is None else settings
         self.current_printer = None
 
     def ask_index(self, title, entries):
@@ -143,7 +146,7 @@ class CLI_APP():
         '''
         printer = self.current_printer
         kind = source_kind(printer.source)
-        print(f"Scan from '{printer.source}' (this first empties '{SCAN_FOLDER_DEFAULT}')")
+        print(f"Scan from '{printer.source}', saving in '{self.settings.save_location}'")
         selection = None
         if kind is None:
             print("\t[0]: one page at a time\t[1]: everything in the source")
@@ -161,46 +164,86 @@ class CLI_APP():
         return printer.scan(one_at_a_time=(selection == '0') if kind is None else None,
                             combine=combine, output_format=output_format, two_sided=two_sided)
 
+    def ask_scan_name(self):
+        while True:
+            name = input(f"Name (Enter for {DEFAULT_SCAN_NAME}) >> ").strip() or DEFAULT_SCAN_NAME
+            try:
+                check_scan_name(name)
+                return name
+            except ValueError as error:
+                print(error)
+
     def handle_event(self, event):
         '''Shows an event of the scan, and returns the answer to send back if it asks for one.'''
         match event:
             case Progress(text):
                 print(text, end='', flush=True)
-            case PageScanned(path, number):
-                print(f"\nPage {number} saved in '{path}'")
+            case PageScanned(_, number):
+                print(f"\nPage {number} scanned")
             case NeedsInput(kind) if kind == FLIP:
                 input("Turn the stack around. Press Enter to continue ...")
             case NeedsInput():
                 return input("Place the next page. Enter to scan it, 's' to stop >> ").strip().lower() != 's'
-            case Done(files):
-                print(f"\nDone: {', '.join(files)}")
 
-    async def run_scan(self, scan):
+    async def run_scan(self, scan, name):
+        '''Runs the scan and saves the finished files under this name.'''
+        files = None
         # aclosing: if we stop early (Ctrl-C), the running scanimage is stopped too
         async with aclosing(scan) as events:
             try:
                 event = await anext(events)
                 while True:
+                    if isinstance(event, Done):
+                        files = event.files
                     event = await events.asend(self.handle_event(event))
             except StopAsyncIteration:
                 pass
             except (RuntimeError, ValueError) as error:
                 print(f"\nScan failed: {error}")
+                return
+        if files:
+            await self.save_scan(files, name)
+
+    async def save_scan(self, files, name):
+        location = self.settings.save_location
+        try:
+            saved = await location.save(files, name)
+        except RuntimeError as error:
+            print(f"\nSaving failed: {error}\nThe scan stays in '{SCAN_FOLDER_DEFAULT}' until the next scan")
+            return
+        print(f"\nSaved in '{location}': {', '.join(saved)}")
+        await Printer.clean_scans_folder()
 
     async def scan(self):
         try:
+            await self.settings.save_location.validate_storage_path()   # before any paper moves
             scan = self.choose_scan()
-        except ValueError as error:
+        except (RuntimeError, ValueError) as error:
             print(error)
             return
         if scan is not None:
-            await self.run_scan(scan)
+            await self.run_scan(scan, self.ask_scan_name())
+
+    async def change_save_location(self):
+        print(f"Scans are saved in '{self.settings.save_location}'")
+        path = input("New folder (Enter to keep it) >> ").strip()
+        if not path:
+            return
+        location = LocalFolderStorage(path)
+        try:
+            await location.validate_storage_path()
+        except RuntimeError as error:
+            print(error)
+            return
+        self.settings.save_location = location
+        print(f"Scans will be saved in '{location}'")
 
     async def printer_menu(self):
         '''Asks what to do with the current printer and does it. Returns False if the user wants to quit.'''
         printer = self.current_printer
         print(f"\nPrinter: {printer.device}, source: {printer.source}")
-        print("\t[1]: add new printer\n\t[2]: change printer\n\t[3]: configure scanner\n\t[4]: scan\n\t[5/d]: delete this printer")
+        print("\t[1]: add new printer\n\t[2]: change printer\n\t[3]: configure scanner\n\t[4]: scan"
+              f"\n\t[5]: change save location ({self.settings.save_location})\n\t[d]: delete this printer")
         match input("(Enter to quit) >> ").strip().lower():
             case '':
                 return False
@@ -212,7 +255,9 @@ class CLI_APP():
                 self.configure_printer()
             case '4':
                 await self.scan()
-            case '5' | 'd':
+            case '5':
+                await self.change_save_location()
+            case 'd':
                 self.delete_printer()
             case _:
                 print("Invalid choice!")

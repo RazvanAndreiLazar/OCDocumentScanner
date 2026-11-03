@@ -1,6 +1,5 @@
 import asyncio
-import json
-import os
+from printer_backend.json_file import read_json, write_json
 from printer_backend.printer import Printer
 
 PRINTERS_FILE_DEFAULT = './data/printers.json'
@@ -16,20 +15,10 @@ class PrinterRepository():
         self.printers: dict[str, Printer] = self._load()
 
     def _load(self) -> dict[str, Printer]:
-        try:
-            with open(self.path, encoding='utf-8') as file:
-                data = json.load(file)
-        except FileNotFoundError:
-            return {}
-        return {entry['device']: Printer.from_dict(entry) for entry in data}
+        return {entry['device']: Printer.from_dict(entry) for entry in read_json(self.path, [])}
 
     def _save(self):
-        # written next to the file and moved over it: a crash can't leave half of a file behind
-        temporary = f'{self.path}.tmp'
-        os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
-        with open(temporary, 'w', encoding='utf-8') as file:
-            json.dump([printer.to_dict() for printer in self.printers.values()], file, indent=2)
-        os.replace(temporary, self.path)
+        write_json(self.path, [printer.to_dict() for printer in self.printers.values()])
 
     def add_printer(self, printer: Printer):
         '''Saves a printer whose options were loaded, raising ValueError if it is already saved.'''

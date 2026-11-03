@@ -7,9 +7,12 @@ from pathlib import Path
 from unittest import mock
 
 from main_cli import CLI_APP
+from printer_backend import printer as printer_module
 from printer_backend.options import parse_help
 from printer_backend.printer import Printer
 from printer_backend.printer_repository import PrinterRepository
+from printer_backend.settings_repository import SettingsRepository
+from printer_backend.storage import LocalFolderStorage
 from printer_backend.scanning import Done, FLIP, NEXT_PAGE, NeedsInput, PageScanned, Progress
 
 FIXTURES = Path(__file__).parent / 'fixtures'
@@ -42,7 +45,17 @@ class CliTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         self.path = os.path.join(folder.name, 'printers.json')
         self.repository = PrinterRepository(self.path)
-        self.app = CLI_APP(self.repository)
+        # nothing here may touch the real ./scans, data/ or ~/Documents
+        self.scans = os.path.join(folder.name, 'scans')
+        os.makedirs(self.scans)
+        scans = mock.patch.object(printer_module, 'SCAN_FOLDER_DEFAULT', self.scans)
+        scans.start()
+        self.addCleanup(scans.stop)
+        self.saved = os.path.join(folder.name, 'saved')
+        self.settings_path = os.path.join(folder.name, 'settings.json')
+        self.settings = SettingsRepository(self.settings_path)
+        self.settings.save_location = LocalFolderStorage(self.saved)
+        self.app = CLI_APP(self.repository, self.settings)
         self.app.current_printer = FakePrinter()
         self.output = io.StringIO()
         redirect = contextlib.redirect_stdout(self.output)
@@ -92,7 +105,7 @@ class ChooseScanTest(CliTestCase):
                 self.assertEqual(self.app.current_printer.calls[0]['output_format'], 'png')
         self.assertNotIn('one page at a time', self.output.getvalue())
         self.assertNotIn('start scanning', self.output.getvalue())
-        self.assertIn('first empties', self.output.getvalue())
+        self.assertIn(f"saving in '{self.saved}'", self.output.getvalue())
 
     def test_unknown_source_chooses_the_method(self):
         self.app.current_printer = FakePrinter('Tray 2')
@@ -292,9 +305,44 @@ class RunTest(CliTestCase):
     async def test_scan(self):
         with mock.patch.object(self.app, 'choose_scan', return_value='scan'), \
                 mock.patch.object(self.app, 'run_scan', mock.AsyncMock()) as run_scan:
+            self.typing('4', 'invoice', '')
+            await self.app.run()
+        run_scan.assert_awaited_once_with('scan', 'invoice')
+
+    async def test_scan_name_defaults_and_bad_names_are_asked_again(self):
+        with mock.patch.object(self.app, 'choose_scan', return_value='scan'), \
+                mock.patch.object(self.app, 'run_scan', mock.AsyncMock()) as run_scan:
+            self.typing('4', '../invoice', '.', '', '')
+            await self.app.run()
+        run_scan.assert_awaited_once_with('scan', 'scan')
+        self.assertIn("'../invoice' can't be used", self.output.getvalue())
+
+    async def test_unusable_location_stops_before_scanning(self):
+        Path(self.saved).write_text('a file, not a folder')
+        with mock.patch.object(self.app, 'choose_scan') as choose_scan:
             self.typing('4', '')
             await self.app.run()
-        run_scan.assert_awaited_once_with('scan')
+        choose_scan.assert_not_called()
+        self.assertIn("Can't save in", self.output.getvalue())
+
+    async def test_change_save_location(self):
+        new = os.path.join(self.saved, 'new')
+        self.typing('5', new, '')
+        await self.app.run()
+        self.assertEqual(str(SettingsRepository(self.settings_path).save_location), new)
+        self.assertTrue(os.path.isdir(new))
+
+    async def test_enter_keeps_the_save_location(self):
+        self.typing('5', '', '')
+        await self.app.run()
+        self.assertEqual(str(SettingsRepository(self.settings_path).save_location), self.saved)
+
+    async def test_unusable_save_location_is_not_kept(self):
+        with mock.patch('printer_backend.storage.SCAN_FOLDER_DEFAULT', self.scans):
+            self.typing('5', os.path.join(self.scans, 'inside'), '')
+            await self.app.run()
+        self.assertEqual(str(SettingsRepository(self.settings_path).save_location), self.saved)
+        self.assertIn('temporary folder', self.output.getvalue())
 
     async def test_a_rejected_scan_shows_the_message_and_goes_back(self):
         self.app.current_printer = FakePrinter()
@@ -304,7 +352,7 @@ class RunTest(CliTestCase):
         self.assertIn('wrong kind of source', self.output.getvalue())
 
     async def test_delete_goes_back_to_the_selection(self):
-        for key in ('5', 'd', 'D'):
+        for key in ('d', 'D'):
             with self.subTest(key):
                 self.repository.add_printer(make_printer('extra'))
                 self.app.current_printer = self.repository.get_printer('extra')
@@ -313,6 +361,12 @@ class RunTest(CliTestCase):
                 self.assertIsNone(self.app.current_printer)
                 self.assertEqual([printer.device for printer in PrinterRepository(self.path).get_all_printers()],
                                  ['one', 'two'])
+
+    async def test_five_does_not_delete(self):
+        self.typing('5', '', '')    # asks for a new save location, Enter keeps it
+        await self.app.run()
+        self.assertEqual(len(PrinterRepository(self.path).get_all_printers()), 2)
+        self.assertNotIn('Delete', self.output.getvalue())
 
     async def test_delete_can_be_refused(self):
         self.typing('d', '', '')
@@ -331,20 +385,59 @@ class RunScanTest(CliTestCase):
             replies.append((yield NeedsInput(NEXT_PAGE)))
             replies.append((yield NeedsInput(NEXT_PAGE)))
             yield NeedsInput(FLIP)
-            yield Done(['scans/test.pdf'])
 
         self.typing('', 's', '')
-        await self.app.run_scan(scan())
+        await self.app.run_scan(scan(), 'scan')
         self.assertEqual(replies, [True, False])
-        for text in ('working', "Page 1 saved in 'scans/scan001.png'", 'Done: scans/test.pdf'):
+        for text in ('working', 'Page 1 scanned'):
             self.assertIn(text, self.output.getvalue())
+
+    def finished_scan(self, *names):
+        '''A scan that leaves these files and a page in the temporary folder.'''
+        Path(self.scans, 'scan001.png').write_text('page')
+        files = [os.path.join(self.scans, name) for name in names]
+        for file in files:
+            Path(file).write_text(os.path.basename(file))
+
+        async def scan():
+            yield Done(files)
+        return scan()
+
+    async def test_only_the_final_files_are_saved_and_the_temporary_folder_is_emptied(self):
+        os.makedirs(self.saved)
+        await self.app.run_scan(self.finished_scan('test.pdf'), 'invoice')
+        self.assertEqual(os.listdir(self.saved), ['invoice.pdf'])
+        self.assertEqual(Path(self.saved, 'invoice.pdf').read_text(), 'test.pdf')
+        self.assertEqual(os.listdir(self.scans), [])
+        self.assertIn(f"Saved in '{self.saved}': invoice.pdf", self.output.getvalue())
+
+    async def test_several_files_are_numbered_in_order(self):
+        os.makedirs(self.saved)
+        await self.app.run_scan(self.finished_scan('scan001.pdf', 'scan002.pdf'), 'invoice')
+        self.assertEqual(Path(self.saved, 'invoice(1).pdf').read_text(), 'scan001.pdf')
+        self.assertEqual(Path(self.saved, 'invoice(2).pdf').read_text(), 'scan002.pdf')
+
+    async def test_failed_save_keeps_the_temporary_files(self):
+        # the location was removed after the check at the start of the scan
+        await self.app.run_scan(self.finished_scan('test.pdf'), 'invoice')
+        self.assertIn('Saving failed', self.output.getvalue())
+        self.assertEqual(sorted(os.listdir(self.scans)), ['scan001.png', 'test.pdf'])
+
+    async def test_failed_scan_saves_nothing(self):
+        async def scan():
+            yield Done([os.path.join(self.scans, 'test.pdf')])
+            raise RuntimeError('scanimage failed')
+
+        with mock.patch.object(self.app, 'save_scan', mock.AsyncMock()) as save_scan:
+            await self.app.run_scan(scan(), 'invoice')
+        save_scan.assert_not_called()
 
     async def test_failures_are_shown(self):
         async def scan():
             yield Progress('working')
             raise RuntimeError('scanimage failed')
 
-        await self.app.run_scan(scan())
+        await self.app.run_scan(scan(), 'scan')
         self.assertIn('Scan failed: scanimage failed', self.output.getvalue())
 
     async def test_stopping_early_closes_the_scan(self):
@@ -358,7 +451,7 @@ class RunScanTest(CliTestCase):
 
         with mock.patch.object(self.app, 'handle_event', side_effect=KeyboardInterrupt), \
                 self.assertRaises(KeyboardInterrupt):
-            await self.app.run_scan(scan())
+            await self.app.run_scan(scan(), 'scan')
         self.assertEqual(closed, [True])
 
 

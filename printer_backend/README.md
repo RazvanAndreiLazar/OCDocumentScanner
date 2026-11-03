@@ -8,6 +8,9 @@ The backend does no direct user input or output during a scan. It reports what h
 |---|---|
 | `printer.py` | `Printer`: discovery, per-source options, scan methods |
 | `printer_repository.py` | `PrinterRepository`: saved printers and their options, in a JSON file |
+| `storage.py` | `ScanStorage` and `LocalFolderStorage`: where finished scans are saved, and how they are named |
+| `settings_repository.py` | `SettingsRepository`: settings that apply to every printer, such as the save location |
+| `json_file.py` | `read_json` and `write_json`, used by both repositories |
 | `options.py` | `ScanOption` and `parse_help`, the parser for `scanimage` option listings. It runs no commands |
 | `scanning.py` | Constants, scan events, `source_kind`, `run_command`, and the version check `init` |
 
@@ -97,7 +100,7 @@ Passing `one_at_a_time` on a known source doesn't override the source. A conflic
 
 ### What each scan does
 
-Every scan starts with `clean_scans_folder()`, which deletes everything in `./scans`. Nothing is cleaned afterwards.
+Every scan starts with `clean_scans_folder()`, which deletes everything in `./scans`, so that folder is only temporary. The scan methods don't clean up afterwards; `main_cli.py` empties it once the files are saved (see "Saving scans").
 
 - **One at a time:** one `scanimage -o` call per page. It asks `NEXT_PAGE` before every page after the first, and stops at `count` pages or when the answer isn't true.
 - **Feeder, one side:** one `scanimage --batch` run.
@@ -129,7 +132,7 @@ Scan methods return async generators. The event classes are in `scanning.py`.
 | `PageScanned(path, number)` | A page was written | none |
 | `NeedsInput(NEXT_PAGE)` | Scan another page? | `True` continues; anything else stops |
 | `NeedsInput(FLIP)` | Turn the stack around | anything, once it's done |
-| `Done(files)` | The finished files | none |
+| `Done(files)` | The finished files, still in `./scans` | none |
 
 ```python
 async with aclosing(printer.scan()) as events:
@@ -144,6 +147,39 @@ async with aclosing(printer.scan()) as events:
 ```
 
 Failures raise `RuntimeError` from the generator. Closing the generator stops any running command. `main_cli.py` has a complete example in `run_scan`.
+
+### Saving scans
+
+`Printer` only knows about `./scans`. The caller takes the files from `Done` and hands them to a `ScanStorage`, so intermediate PNGs never reach the save location:
+
+```python
+location = SettingsRepository().save_location              # ~/Documents/Scans until it is changed
+await location.check()                                     # RuntimeError if it can't be used
+...                                                        # run the scan, keep the files from Done
+saved = await location.save(files, 'invoice')              # the file names they got
+await Printer.clean_scans_folder()
+```
+
+Nothing is ever overwritten. A taken name gets the next number after the highest one already there:
+
+| Already there | New scan | Result |
+|---|---|---|
+| nothing | 1 file | `scan.pdf` |
+| nothing | 2 files | `scan(1).pdf`, `scan(2).pdf` |
+| `scan.pdf` | 1 file | `scan(1).pdf` |
+| `scan.pdf`, `scan(1).pdf` | 2 files | `scan(2).pdf`, `scan(3).pdf` |
+
+`check_scan_name` refuses names that could lead to another folder. `LocalFolderStorage.check` refuses `./scans` and anything inside it, because the next scan would delete what was saved there.
+
+If saving fails, `main_cli.py` leaves the files in `./scans`, where they stay until the next scan.
+
+To add a kind of location, such as OpenCloud:
+1. Subclass `ScanStorage` and implement `validate_storage_path`, `existing_names`, `copy_file_to_target_location`, `to_dict`, `from_dict` and `__str__`. The naming in `save` is inherited.
+2. Raise `RuntimeError` for failures, and refuse to overwrite in `copy_file_to_target_location`.
+3. Add it to `STORAGE_TYPES`, using the same key as `'type'` in `to_dict`.
+4. Let the user choose it in `change_save_location` in `main_cli.py`, which only asks for a folder today.
+
+`to_dict` ends up in `data/settings.json` as plain text, so keep passwords and tokens out of it.
 
 ### `scanimage` behavior the code works around
 
