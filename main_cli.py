@@ -26,8 +26,11 @@ class CLI_APP():
             break
 
     def display_printer_options(self):
-        for option in self.current_printer.options.values():
-            print('\t', option)
+        printer = self.current_printer
+        print(f"Source: {printer.source} (change with 'source <name>': {' | '.join(printer.sources)})")
+        for option in printer.current_options.values():
+            if option.active:
+                print('\t', option)
 
     def configure_printer(self):
         '''Changes options with '<option> <new_value>' until the user enters nothing.'''
@@ -45,7 +48,10 @@ class CLI_APP():
                 continue
 
             try:
-                self.current_printer.set_option(name, value)
+                if name == 'source':
+                    self.current_printer.select_source(value)
+                else:
+                    self.current_printer.set_option(name, value)
             except ValueError as error:
                 print(error)
 

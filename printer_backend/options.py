@@ -49,12 +49,14 @@ class ScanOption():
         if self.is_boolean:
             return f'{self.name} ({self.value})'
 
-        raise AttributeError(f"Option '{self.name}' does not have an accepted type") 
+        # free text or number, e.g. '--adf-justification-x <string>'
+        return f'{self.name} ({self.value})'
 
 
 # '    --mode Lineart|Gray|Color [Color]', '    --flag[=(yes|no)] [no]', '    -l 0..215.9mm [0]'
 OPTION_LINE = re.compile(r'^ {4}(--?[\w-]+)(\[=\(yes\|no\)\])?(?: +(.*))?$')
 RANGE = re.compile(r'^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)([a-zA-Z%]*)$')
+FREE_VALUE = re.compile(r'^<\w+>$')    # '<string>', '<int>': no list or range to check against
 NUMBER_WITH_UNIT = re.compile(r'^(-?\d+(?:\.\d+)?)([a-zA-Z%]*)$')
 
 
@@ -74,6 +76,9 @@ def _parse_values(text: str, option: ScanOption):
         option.min, option.max, option.unit = float(match.group(1)), float(match.group(2)), match.group(3)
         return
 
+    if FREE_VALUE.match(text):
+        return
+
     values = text.split('|')
     # the unit is only written on the last value: '75|100|300dpi'
     if len(values) > 1 and (match := NUMBER_WITH_UNIT.match(values[-1])) and match.group(2):
@@ -84,10 +89,10 @@ def _parse_values(text: str, option: ScanOption):
 
 def parse_help(text: str) -> dict[str, ScanOption]:
     '''
-    Parses the device specific part of `scanimage -d DEVICE --help`.
+    Parses the device specific part of `scanimage -d DEVICE --help` or `scanimage -d DEVICE -A`.
     Takes only the text, so it can be tested without a scanner.
     '''
-    start = re.search(r'^Options specific to device.*$', text, re.MULTILINE)
+    start = re.search(r'^(?:All o|O)ptions specific to device.*$', text, re.MULTILINE)
     if start:
         text = text[start.end():]
     # everything after this is the device list, which can hold garbage (see escl)

@@ -1,18 +1,51 @@
-Options specific to device `hpaio:/net/ENVY_6400_series?ip=192.168.0.178':
-  Scan mode:
-    --mode Lineart|Gray|Color [Color]
-        Selects the scan mode (e.g., lineart, monochrome, or color).
-    --resolution 75|100|150|200|300dpi [75]
+Usage: scanimage [OPTION]...
+
+Start image acquisition on a scanner device and write image data to
+standard output.
+
+Parameters are separated by a blank from single-character options (e.g.
+-d epson) and by a "=" from multi-character options (e.g. --device-name=epson).
+-d, --device-name=DEVICE   use a given scanner device (e.g. hp:/dev/scanner)
+    --format=pnm|tiff|png|jpeg|pdf  file format of output file
+-i, --icc-profile=PROFILE  include this ICC profile into TIFF file
+-L, --list-devices         show available scanner devices
+-f, --formatted-device-list=FORMAT similar to -L, but the FORMAT of the output
+                           can be specified: %d (device name), %v (vendor),
+                           %m (model), %t (type), %i (index number), and
+                           %n (newline)
+-b, --batch[=FORMAT]       working in batch mode, FORMAT is `out%d.pnm' `out%d.tif'
+                           `out%d.png' or `out%d.jpg' by default depending on --format
+                           This option is incompatible with --output-file.
+    --batch-start=#        page number to start naming files with
+    --batch-count=#        how many pages to scan in batch mode
+    --batch-increment=#    increase page number in filename by #
+    --batch-double         increment page number by two, same as
+                           --batch-increment=2
+    --batch-print          print image filenames to stdout
+    --batch-prompt         ask for pressing a key before scanning a page
+    --accept-md5-only      only accept authorization requests using md5
+-p, --progress             print progress messages
+-o, --output-file=PATH     save output to the given file instead of stdout.
+                           This option is incompatible with --batch.
+-n, --dont-scan            only set options, don't actually scan
+-T, --test                 test backend thoroughly
+-A, --all-options          list all available backend options
+-h, --help                 display this help message and exit
+-v, --verbose              give even more status messages
+-B, --buffer-size=#        change input buffer size (in kB, default 32)
+-V, --version              print version information
+Output format is not set, using pnm as a default.
+
+Options specific to device `airscan:e0:HP ENVY 6400 series [03755A]':
+  Standard:
+    --resolution 75|100|150|200|300|400|600|1200dpi [300]
         Sets the resolution of the scanned image.
+    --mode Color|Gray [Color]
+        Selects the scan mode (e.g., lineart, monochrome, or color).
+    --scan-intent *unset*|Document|Text and Graphic|Photo|Preview [*unset*]
+        Optimize scan for Text/Photo/etc.
     --source Flatbed|ADF [Flatbed]
         Selects the scan source (such as a document-feeder).
-  Advanced:
-    --compression JPEG [JPEG] [advanced]
-        Selects the scanner compression method for faster scans, possibly at
-        the expense of image quality.
-    --jpeg-quality 0..100 [inactive]
-        Sets the scanner JPEG compression factor. Larger numbers mean better
-        compression, and smaller numbers mean better image quality.
   Geometry:
     -l 0..215.9mm [0]
         Top-left x position of scan area.
@@ -22,8 +55,22 @@ Options specific to device `hpaio:/net/ENVY_6400_series?ip=192.168.0.178':
         Width of scan-area.
     -y 0..297.011mm [297.011]
         Height of scan-area.
-    --multi-pick 0..1 [0] [advanced]
-        Select multipick option for ESCL protocol based devices
+  Enhancement:
+    --brightness -100..100% (in steps of 1) [0]
+        Controls the brightness of the acquired image.
+    --contrast -100..100% (in steps of 1) [0]
+        Controls the contrast of the acquired image.
+    --shadow 0..100% (in steps of 1) [0]
+        Selects what radiance level should be considered "black".
+    --highlight 0..100% (in steps of 1) [100]
+        Selects what radiance level should be considered "white".
+    --analog-gamma 0.0999908..4 [1]
+        Analog gamma-correction
+    --negative[=(yes|no)] [no]
+        Swap black and white
 
 Type ``scanimage --help -d DEVICE'' to get list of all options for DEVICE.
 
+List of available devices:
+    hpaio:/net/ENVY_6400_series?ip=192.168.0.178
+    airscan:e0:HP ENVY 6400 series [03755A]

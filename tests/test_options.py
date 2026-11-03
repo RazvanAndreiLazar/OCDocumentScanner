@@ -2,9 +2,18 @@ import unittest
 from pathlib import Path
 
 from printer_backend.options import parse_help
-from printer_backend.printer import Printer
+from printer_backend.printer import NO_SOURCE, Printer
 
 FIXTURES = Path(__file__).parent / 'fixtures'
+SOURCE = 'Flatbed'     # a source every fixture offers
+
+
+def printer_with(options):
+    '''A Printer whose sources all offer these options.'''
+    printer = Printer('dev')
+    printer.options = {choice: options for choice in options['source'].choices}
+    printer.select_source(SOURCE)
+    return printer
 
 
 class OptionTypesMixin():
@@ -27,8 +36,7 @@ class OptionTypesMixin():
 
     def setUp(self):
         self.options = parse_help(self.fixture.read_text())
-        self.printer = Printer('dev')
-        self.printer.options = self.options
+        self.printer = printer_with(self.options)
 
     def test_every_option_is_covered(self):
         expected = set(self.enumerations) | set(self.ranges) | set(self.booleans)
@@ -66,7 +74,8 @@ class OptionTypesMixin():
                                  (flag, ['yes', 'no'], value))
                 self.assertTrue(option.is_boolean)
                 # an optional argument can only be attached with '='
-                self.assertEqual(self.printer.to_args({name: 'yes'}), [f'{flag}=yes'])
+                self.assertEqual(self.printer.to_args({name: 'yes'}),
+                                 ['--source', SOURCE, f'{flag}=yes'])
                 self.assertFalse(option.accepts('maybe'))
 
     def test_inactive(self):
@@ -92,15 +101,20 @@ class OptionTypesMixin():
 
     def test_to_args_for_every_option(self):
         for name, option in self.options.items():
-            if not option.active:
+            if not option.active or name == 'source':
                 continue
             with self.subTest(name):
                 value = option.choices[-1] if option.choices is not None else option.max
                 args = self.printer.to_args({name: value})
                 if option.is_boolean:
-                    self.assertEqual(args, [f'{option.flag}={value}'])
+                    self.assertEqual(args, ['--source', SOURCE, f'{option.flag}={value}'])
                 else:
-                    self.assertEqual(args, [option.flag, str(value)])
+                    self.assertEqual(args, ['--source', SOURCE, option.flag, str(value)])
+
+    def test_source_is_not_a_setting(self):
+        for source in self.options['source'].choices:
+            with self.subTest(source), self.assertRaises(ValueError):
+                self.printer.to_args({'source': source})
 
 
 class HpaioOptionsTest(OptionTypesMixin, unittest.TestCase):
@@ -172,12 +186,12 @@ class AirscanOptionsTest(OptionTypesMixin, unittest.TestCase):
 
 class PrinterSettingsTest(unittest.TestCase):
     def setUp(self):
-        self.printer = Printer('dev')
-        self.printer.options = parse_help((FIXTURES / 'envy_6400_help.txt').read_text())
+        self.printer = printer_with(parse_help((FIXTURES / 'envy_6400_help.txt').read_text()))
+        self.options = self.printer.options_of(SOURCE)
 
     def test_to_args(self):
         self.assertEqual(self.printer.to_args({'mode': 'Gray', 'resolution': 300}),
-                         ['--mode', 'Gray', '--resolution', '300'])
+                         ['--source', SOURCE, '--mode', 'Gray', '--resolution', '300'])
 
     def test_rejects_bad_values(self):
         for settings in ({'resolution': '600'}, {'mode': 'Foo'}, {'x': 999}, {'nope': 1}, {'jpeg-quality': 50}):
@@ -187,16 +201,164 @@ class PrinterSettingsTest(unittest.TestCase):
     def test_set_option_changes_the_value(self):
         self.printer.set_option('mode', 'Gray')
         self.printer.set_option('resolution', 300)
-        self.assertEqual(self.printer.options['mode'].value, 'Gray')
-        self.assertEqual(self.printer.options['resolution'].value, '300')
+        self.assertEqual(self.options['mode'].value, 'Gray')
+        self.assertEqual(self.options['resolution'].value, '300')
 
     def test_set_option_keeps_the_value_when_rejected(self):
-        for name, value in (('mode', 'Foo'), ('resolution', '600'), ('nope', '1'), ('jpeg-quality', '50')):
+        for name, value in (('mode', 'Foo'), ('resolution', '600'), ('nope', '1'), ('jpeg-quality', '50'),
+                            ('source', 'ADF')):
             with self.subTest(name), self.assertRaises(ValueError):
                 self.printer.set_option(name, value)
-        self.assertEqual(self.printer.options['mode'].value, 'Color')
-        self.assertEqual(self.printer.options['resolution'].value, '75')
-        self.assertIsNone(self.printer.options['jpeg-quality'].value)
+        self.assertEqual(self.options['mode'].value, 'Color')
+        self.assertEqual(self.options['resolution'].value, '75')
+        self.assertIsNone(self.options['jpeg-quality'].value)
+
+    def test_unknown_source(self):
+        with self.assertRaises(ValueError):
+            self.printer.options_of('Duplex')
+
+
+class AllOptionsOutputTest(unittest.TestCase):
+    '''`scanimage -d DEVICE -A` is what the printer loads: it is much faster than --help.'''
+    def setUp(self):
+        self.options = parse_help((FIXTURES / 'envy_6400_airscan_all_options.txt').read_text())
+
+    def test_same_options_as_help_plus_the_inactive_ones(self):
+        from_help = parse_help((FIXTURES / 'envy_6400_airscan_flatbed.txt').read_text())
+        extra = set(self.options) - set(from_help)
+        self.assertEqual(extra, {'adf-justification-x', 'adf-justification-y'})
+        for name, option in from_help.items():
+            self.assertEqual(self.options[name], option, name)
+
+    def test_free_text_options(self):
+        for name in ('adf-justification-x', 'adf-justification-y'):
+            with self.subTest(name):
+                option = self.options[name]
+                self.assertEqual((option.choices, option.min, option.value), (None, None, None))
+                self.assertFalse(option.active)
+                self.assertEqual(str(option), f'{name} (inactive)')
+
+    def test_active_free_text_option(self):
+        text = "Options specific to device `x':\n    --label <string> [front]\n    --count <int> [3]\n"
+        options = parse_help(text)
+        for name, value in (('label', 'front'), ('count', '3')):
+            with self.subTest(name):
+                option = options[name]
+                self.assertEqual((option.choices, option.min, option.value), (None, None, value))
+                self.assertTrue(option.accepts('anything'))
+                self.assertEqual(str(option), f'{name} ({value})')
+
+
+# `--help` output of the printer for every source, as scanimage gives it with `--source X`;
+# None is the output without --source
+HELP_FILES = {
+    'hpaio': {None: 'envy_6400_help.txt',
+              'Flatbed': 'envy_6400_hpaio_flatbed.txt', 'ADF': 'envy_6400_hpaio_adf.txt'},
+    'airscan': {None: 'envy_6400_help_2.txt',
+                'Flatbed': 'envy_6400_airscan_flatbed.txt', 'ADF': 'envy_6400_airscan_adf.txt'},
+}
+
+
+class LoadOptionsTest(unittest.IsolatedAsyncioTestCase):
+    '''Options are kept per source, because a source can change what the other options allow.'''
+    async def load(self, backend):
+        printer = Printer(backend)
+        self.calls = []
+
+        async def read_help(*args):
+            self.calls.append(args)
+            source = args[0] if args else None
+            return parse_help((FIXTURES / HELP_FILES[backend][source]).read_text())
+
+        printer._load_options_per_source = read_help
+        await printer.load_options()
+        return printer
+
+    async def test_loads_the_options_of_every_source(self):
+        for backend in HELP_FILES:
+            with self.subTest(backend):
+                printer = await self.load(backend)
+                self.assertEqual(printer.sources, ['Flatbed', 'ADF'])
+                self.assertIs(printer.options_of('Flatbed'), printer.options['Flatbed'])
+                self.assertEqual(printer.options_of('ADF')['source'].value, 'ADF')
+
+    async def test_current_source_starts_on_the_device_default(self):
+        for backend in HELP_FILES:
+            with self.subTest(backend):
+                printer = await self.load(backend)
+                self.assertEqual(printer.source, 'Flatbed')
+                self.assertIs(printer.current_options, printer.options['Flatbed'])
+
+    async def test_select_source(self):
+        printer = await self.load('airscan')
+        printer.select_source('ADF')
+        self.assertEqual(printer.source, 'ADF')
+        self.assertIs(printer.current_options, printer.options['ADF'])
+        # the options of the other source are untouched
+        self.assertEqual(printer.options['Flatbed']['source'].value, 'Flatbed')
+
+    async def test_rejected_source_keeps_the_current_one(self):
+        printer = await self.load('hpaio')
+        with self.assertRaises(ValueError):
+            printer.select_source('Duplex')
+        self.assertEqual(printer.source, 'Flatbed')
+
+    async def test_source_is_passed_even_when_it_is_the_default(self):
+        printer = await self.load('hpaio')
+        self.assertIn(('Flatbed',), self.calls)
+        self.assertIn(('ADF',), self.calls)
+
+    async def test_resolutions_depend_on_the_source(self):
+        for backend in HELP_FILES:
+            with self.subTest(backend):
+                printer = await self.load(backend)
+                self.assertEqual(printer.options['Flatbed']['resolution'].choices[-3:], ['400', '600', '1200'])
+                self.assertEqual(printer.options['ADF']['resolution'].choices[-1], '300')
+
+    async def test_default_listing_of_hpaio_hides_flatbed_resolutions(self):
+        # why every source is queried with an explicit --source
+        default = parse_help((FIXTURES / HELP_FILES['hpaio'][None]).read_text())
+        self.assertNotIn('1200', default['resolution'].choices)
+
+    async def test_device_without_source_option(self):
+        printer = Printer('dev')
+        listing = {name: option for name, option in parse_help((FIXTURES / HELP_FILES['hpaio'][None]).read_text()).items()
+                   if name != 'source'}
+
+        async def read_help(*args):
+            return listing
+
+        printer._load_options_per_source = read_help
+        await printer.load_options()
+        self.assertEqual(printer.sources, [NO_SOURCE])
+        self.assertEqual(printer.source, NO_SOURCE)
+        self.assertIs(printer.current_options, listing)
+        # there is no source to pass on
+        self.assertEqual(printer.to_args({'mode': 'Gray'}), ['--mode', 'Gray'])
+
+    async def test_each_source_keeps_its_own_values(self):
+        printer = await self.load('airscan')
+        printer.set_option('resolution', 1200)
+        printer.select_source('ADF')
+        with self.assertRaises(ValueError):
+            printer.set_option('resolution', 1200)     # not offered by the feeder
+        printer.set_option('mode', 'Gray')
+
+        self.assertEqual(printer.options_of('Flatbed')['resolution'].value, '1200')
+        self.assertEqual(printer.options_of('Flatbed')['mode'].value, 'Color')
+        self.assertEqual(printer.options_of('ADF')['mode'].value, 'Gray')
+        self.assertEqual(printer.options_of('ADF')['resolution'].value, '300')
+
+    async def test_settings_are_checked_against_the_current_source(self):
+        printer = await self.load('airscan')
+        printer.select_source('ADF')
+        self.assertEqual(printer.to_args({'resolution': 300}),
+                         ['--source', 'ADF', '--resolution', '300'])
+        with self.assertRaises(ValueError):
+            printer.to_args({'resolution': 1200})
+        printer.select_source('Flatbed')
+        self.assertEqual(printer.to_args({'resolution': 1200}),
+                         ['--source', 'Flatbed', '--resolution', '1200'])
 
 
 if __name__ == '__main__':
