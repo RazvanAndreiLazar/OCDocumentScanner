@@ -85,6 +85,18 @@ class PrinterRepositoryTest(unittest.IsolatedAsyncioTestCase):
     def reopened(self):
         return PrinterRepository(self.path)
 
+    async def test_find_new_printers_skips_saved_ones_and_non_devices(self):
+        self.repository.add_printer(make_printer('saved'))
+        lines = ["device `saved' is a HP ENVY\n", "device `new one' is a HP ENVY  \n", "No scanners were identified\n"]
+        with mock.patch.object(Printer, 'discover_printers', mock.AsyncMock(return_value=lines)):
+            found = await self.repository.find_new_printers()
+        self.assertEqual(found, {'new one': "device `new one' is a HP ENVY"})
+
+    async def test_find_new_printers_passes_a_failed_discovery_on(self):
+        with mock.patch.object(Printer, 'discover_printers', mock.AsyncMock(side_effect=RuntimeError('no sane'))):
+            with self.assertRaisesRegex(RuntimeError, 'no sane'):
+                await self.repository.find_new_printers()
+
     def test_starts_empty_without_a_file(self):
         self.assertEqual(self.repository.get_all_printers(), [])
         self.assertFalse(os.path.exists(self.path))

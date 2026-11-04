@@ -53,20 +53,10 @@ class CLI_APP():
         '''Saves one of the discovered printers that isn't saved yet.'''
         print("Looking for printers, this can take a while ...")
         try:
-            lines = await Printer.discover_printers()
+            found = await self.repository.find_new_printers()
         except RuntimeError as error:
             print(error)
             return
-
-        saved = {printer.device for printer in self.repository.get_all_printers()}
-        found = {}
-        for line in lines:
-            try:
-                device = Printer.printer_name_from_discovery_line(line)
-            except RuntimeError:    # not a device, e.g. 'No scanners were identified'
-                continue
-            if device not in saved:
-                found[device] = line.strip()
         if not found:
             print("No new printers found")
             return
