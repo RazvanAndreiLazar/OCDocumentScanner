@@ -1,0 +1,6 @@
+{# On every page but the scan itself. It asks all the time: the scan can end, or start on another device, while a page stays open. #}
+<div id="scan-banner" class="scan-banner" hx-get="/scan/banner" hx-trigger="every 3s" hx-swap="outerHTML">
+  {% if scan_job and scan_job.active %}
+    <a href="/scan">{% if scan_job.state == 'waiting' %}A scan needs you{% else %}A scan is in progress{% endif %}</a>
+  {% endif %}
+</div>

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Search for a new printer · Scanner{% endblock %}
+{% block content %}
+<a class="back" href="/">Back</a>
+<h1>Search for a new printer</h1>
+
+<div class="discover stack" hx-post="/printers/discover" hx-trigger="load, click from:#search-again"
+     hx-target="#discovered" hx-indicator="this" hx-disabled-elt="#search-again">
+  <p class="spinner" role="status">Searching your network. This can take about 15 seconds.</p>
+  <div id="discovered"></div>
+  <div id="add-message"></div>
+</div>
+<button id="search-again" type="button" class="button button--quiet">Search again</button>
+{% endblock %}

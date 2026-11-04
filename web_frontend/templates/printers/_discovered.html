@@ -1,0 +1,19 @@
+{% if found %}
+  <div class="stack">
+    <p>Tap a printer to add it.</p>
+    <ul class="rows">
+      {% for device, description in found.items() %}
+        <li>
+          <button type="button" class="row" title="{{ description }}" hx-post="/printers" hx-vals='{{ {"device": device}|tojson }}'
+                  hx-target="#add-message" hx-indicator="this" hx-disabled-elt="this">
+            <span class="row-title">{{ device|device_name }}</span>
+            <span class="row-detail">{{ device }}</span>
+            <span class="row-action" aria-hidden="true"></span>
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% else %}
+  <p>No new printers found. Check that the printer is switched on and connected to this network, then search again.</p>
+{% endif %}

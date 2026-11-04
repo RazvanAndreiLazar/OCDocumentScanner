@@ -1,0 +1,3 @@
+{# Checks once when the page opens, and again whenever the printer picker is opened. Polling would keep waking the printers. #}
+<span class="status" data-state="{{ state|replace(' ', '-') }}" hx-get="/printers/{{ device_id }}/availability"
+      hx-trigger="{{ 'load, ' if state == checking }}picker-open from:body" hx-target="this" hx-swap="outerHTML">{{ state|capitalize }}{{ '…' if state == checking }}</span>
