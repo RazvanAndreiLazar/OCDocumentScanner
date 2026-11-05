@@ -1,7 +1,7 @@
 {# The folder is not part of the form: pressing Enter in it should save it, not start a scan. The form still sends it, see start_scan. #}
 <div class="field">
   <label class="field-label" for="save-path">Save location</label>
-  <input id="save-path" name="path" value="{{ save_location }}" autocomplete="off" spellcheck="false"
+  <input id="save-path" name="path" value="{{ save_location.display_path }}" autocomplete="off" spellcheck="false"
          hx-post="/settings/save-location" hx-trigger="change" hx-target="#location-status">
   <div id="location-status" class="field-status"></div>
 </div>

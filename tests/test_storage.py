@@ -190,6 +190,58 @@ class NewKindOfStorageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(location.url, 'https://cloud')
 
 
+class SaveRootTest(unittest.IsolatedAsyncioTestCase):
+    '''With SAVE_ROOT set (Docker), save locations are folders inside that root.'''
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = os.path.join(folder.name, 'storage')
+        os.makedirs(self.root)
+        self.scans = os.path.join(folder.name, 'scans')
+        patch = mock.patch.dict(os.environ, {'SAVE_ROOT': self.root})
+        patch.start()
+        self.addCleanup(patch.stop)
+        scans = mock.patch.object(storage_module, 'SCAN_FOLDER_DEFAULT', self.scans)
+        scans.start()
+        self.addCleanup(scans.stop)
+
+    def test_relative_location_is_appended_to_the_root(self):
+        self.assertEqual(LocalFolderStorage('Invoices/2026').path, os.path.join(self.root, 'Invoices', '2026'))
+
+    def test_absolute_location_inside_the_root_is_kept(self):
+        self.assertEqual(LocalFolderStorage(os.path.join(self.root, 'a')).path, os.path.join(self.root, 'a'))
+
+    def test_default_location_is_the_root(self):
+        self.assertEqual(str(SettingsRepository(os.path.join(self.root, 'data.json')).save_location), self.root)
+
+    def test_display_path_leaves_out_the_root(self):
+        self.assertEqual(LocalFolderStorage('Invoices/2026').display_path, os.path.join('Invoices', '2026'))
+        self.assertEqual(LocalFolderStorage(os.path.join(self.root, 'a')).display_path, 'a')
+        self.assertEqual(LocalFolderStorage('').display_path, '')
+        self.assertEqual(LocalFolderStorage('/elsewhere').display_path, '/elsewhere')   # a leftover from before the root
+
+    def test_display_path_is_the_whole_path_without_a_root(self):
+        os.environ.pop('SAVE_ROOT')
+        self.assertEqual(LocalFolderStorage('/some/folder').display_path, '/some/folder')
+
+    async def test_locations_outside_the_root_are_refused(self):
+        for path in ('/elsewhere', os.path.join(self.root, '..', 'escape'), '~/Documents', '../escape'):
+            with self.subTest(path), self.assertRaisesRegex(RuntimeError, 'inside'):
+                await LocalFolderStorage(path).validate_storage_path()
+
+    async def test_root_and_folders_inside_it_are_accepted(self):
+        await LocalFolderStorage('').validate_storage_path()
+        await LocalFolderStorage('Invoices').validate_storage_path()
+        self.assertTrue(os.path.isdir(os.path.join(self.root, 'Invoices')))
+
+    async def test_without_a_root_any_folder_is_accepted(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('SAVE_ROOT')
+            folder = os.path.join(os.path.dirname(self.root), 'anywhere')
+            self.assertEqual(LocalFolderStorage(folder).path, folder)
+            await LocalFolderStorage(folder).validate_storage_path()
+
+
 class SettingsRepositoryTest(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()

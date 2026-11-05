@@ -45,8 +45,8 @@ class CliTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         self.path = os.path.join(folder.name, 'printers.json')
         self.repository = PrinterRepository(self.path)
-        # nothing here may touch the real ./scans, data/ or ~/Documents
-        self.scans = os.path.join(folder.name, 'scans')
+        # nothing here may touch the real ./data/scans, data/ or ~/Documents
+        self.scans = os.path.join(folder.name, 'data', 'scans')
         os.makedirs(self.scans)
         scans = mock.patch.object(printer_module, 'SCAN_FOLDER_DEFAULT', self.scans)
         scans.start()

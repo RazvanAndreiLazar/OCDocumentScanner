@@ -1,4 +1,5 @@
 import html
+import os
 import re
 import tempfile
 import time
@@ -511,6 +512,26 @@ class WebSettingsTest(WebTestCase):
         self.assertIn(f'value="{self.folder / "saved"}"', page)
         self.assertIn('hx-post="/settings/save-location"', page)
 
+    def test_with_a_save_root_the_field_leaves_it_out_and_input_is_added_to_it(self):
+        root = self.folder / 'storage'
+        root.mkdir()
+        with mock.patch.dict(os.environ, {'SAVE_ROOT': str(root)}):
+            self.settings.save_location = LocalFolderStorage('Invoices')
+            page = self.client.get(f'/printers/{device_to_id(DEVICE)}').text
+            self.assertIn('value="Invoices"', page)
+            self.assertNotIn(str(root), page)
+
+            response = self.client.post('/settings/save-location', data={'path': 'Taxes/2026'})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('Taxes/2026', response.text)
+            self.assertNotIn(str(root), response.text)
+            self.assertEqual(str(self.settings.save_location), str(root / 'Taxes' / '2026'))
+
+            # empty means the root itself
+            self.assertEqual(self.client.post('/settings/save-location', data={'path': ''}).status_code, 200)
+            self.assertEqual(str(self.settings.save_location), str(root))
+            self.assertEqual(self.client.post('/settings/save-location', data={'path': '../out'}).status_code, 422)
+
     def test_there_is_no_settings_page(self):
         self.assertEqual(self.client.get('/settings').status_code, 404)
         self.assertNotIn('href="/settings"', self.client.get('/').text)
@@ -570,7 +591,7 @@ class WebSettingsTest(WebTestCase):
         blocker = self.folder / 'file'
         blocker.write_text('x')
         before = str(self.settings.save_location)
-        for path in (str(blocker / 'inside'), './scans'):
+        for path in (str(blocker / 'inside'), './data/scans'):
             with self.subTest(path):
                 response = self.client.post('/settings/save-location', data={'path': path})
                 self.assertEqual(response.status_code, 422)

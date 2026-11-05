@@ -102,7 +102,7 @@ Passing `one_at_a_time` on a known source doesn't override the source. A conflic
 
 ### What each scan does
 
-Every scan starts with `clean_scans_folder()`, which deletes everything in `./scans`, so that folder is only temporary. The scan methods don't clean up afterwards; the front end empties it once the files are saved (see "Saving scans").
+Every scan starts with `clean_scans_folder()`, which deletes everything in `./data/scans`, so that folder is only temporary. The scan methods don't clean up afterwards; the front end empties it once the files are saved (see "Saving scans").
 
 - **One at a time:** one `scanimage -o` call per page. It asks `NEXT_PAGE` before every page after the first, and stops at `count` pages or when the answer isn't true.
 - **Feeder, one side:** one `scanimage --batch` run.
@@ -134,7 +134,7 @@ Scan methods return async generators. The event classes are in `scanning.py`.
 | `PageScanned(path, number)` | A page was written | none |
 | `NeedsInput(NEXT_PAGE)` | Scan another page? | `True` continues; anything else stops |
 | `NeedsInput(FLIP)` | Turn the stack around | anything, once it's done |
-| `Done(files)` | The finished files, still in `./scans` | none |
+| `Done(files)` | The finished files, still in `./data/scans` | none |
 
 ```python
 async with aclosing(printer.scan()) as events:
@@ -152,7 +152,7 @@ Failures raise `RuntimeError` from the generator. Closing the generator stops an
 
 ### Saving scans
 
-`Printer` only knows about `./scans`. The caller takes the files from `Done` and hands them to a `ScanStorage`, so intermediate PNGs never reach the save location:
+`Printer` only knows about `./data/scans`. The caller takes the files from `Done` and hands them to a `ScanStorage`, so intermediate PNGs never reach the save location:
 
 ```python
 location = SettingsRepository().save_location              # ~/Documents/Scans until it is changed
@@ -171,9 +171,9 @@ Nothing is ever overwritten. A taken name gets the next number after the highest
 | `scan.pdf` | 1 file | `scan(1).pdf` |
 | `scan.pdf`, `scan(1).pdf` | 2 files | `scan(2).pdf`, `scan(3).pdf` |
 
-`check_scan_name` refuses names that could lead to another folder. `LocalFolderStorage.validate_storage_path` refuses `./scans` and anything inside it, because the next scan would delete what was saved there.
+`check_scan_name` refuses names that could lead to another folder. `LocalFolderStorage.validate_storage_path` refuses `./data/scans` and anything inside it, because the next scan would delete what was saved there.
 
-If saving fails, the front ends leave the files in `./scans`, where they stay until the next scan. The web UI offers to try saving again.
+If saving fails, the front ends leave the files in `./data/scans`, where they stay until the next scan. The web UI offers to try saving again.
 
 To add a kind of location, such as OpenCloud:
 1. Subclass `ScanStorage` and implement `validate_storage_path`, `existing_names`, `copy_file_to_target_location`, `to_dict`, `from_dict` and `__str__`. The naming in `save` is inherited.
@@ -238,7 +238,7 @@ Everything was tried on one printer, the HP ENVY 6400, through the `hpaio` and `
 
 ### Scanning and files
 
-- **Results are temporary:** the next scan deletes everything in `./scans`, including finished documents and anything else in that folder. Files need to be copied out first. The user is warned, but nothing asks for confirmation.
+- **Results are temporary:** the next scan deletes everything in `./data/scans`, including finished documents and anything else in that folder. Files need to be copied out first. The user is warned, but nothing asks for confirmation.
 - **Fixed paths:** the document is always named `test.pdf`, from `DEFAULT_FILE`, and `SCAN_FOLDER_DEFAULT` is relative to the working directory. Neither can be set per scan, and two `Printer` objects would share the folder.
 - **No resume:** an error during a two-sided scan leaves the fronts on disk, but there's no way to continue, and the next scan deletes them.
 - **Rough error messages:** an empty feeder surfaces as `scanimage failed (7)` with raw output. The retry depends on matching the text `open of device`, which could change or be translated.

@@ -40,7 +40,7 @@ async def start_scan(request: Request,
     # the form sends the folder it shows: leaving that field by pressing this button also saves it,
     # and that request might only arrive after this one
     path = (await request.form()).get('path')
-    if path is None or path.strip() == str(settings.save_location):
+    if path is None or path.strip() == settings.save_location.display_path:
         await settings.save_location.validate_storage_path()
     else:
         await change_save_location(settings, path)

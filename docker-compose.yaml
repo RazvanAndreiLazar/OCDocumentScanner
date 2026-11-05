@@ -1,0 +1,70 @@
+# Before the first start, once:  ./docker-init.sh      (creates the folders in DATA_LOCATION, owned by the app's user)
+# Start:                         docker compose up -d --build
+# Then open http://<this machine>/   (port 80; the app itself listens only on 127.0.0.1:8000)
+# Settings go in a .env file next to this one, see "With Docker" in web_frontend/README.md
+services:
+  scanner-web:
+    build: .
+    image: ocdocumentscanner
+    restart: unless-stopped
+    init: true    # collects the scanimage processes left behind when one is killed
+
+    # for finding scanners on the LAN
+    network_mode: host
+
+    # Same owner as the mounted folders, so the files stay yours
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Saving outside the mounts below fails with an error, instead of writing into the container
+    # where the scans would be lost with it
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    environment:
+      WEB_HOST: ${WEB_HOST:-127.0.0.1}    # only the proxy on this machine reaches the app
+      WEB_PORT: ${WEB_PORT:-8000}
+      WEB_ALLOWED_HOSTS: ${WEB_ALLOWED_HOSTS:-*}
+      SAVE_ROOT: /app/storage    # save locations are folders inside the mounted one; relative ones are appended to it
+
+    volumes:
+      - ${DATA_LOCATION}/data:/app/data                       # saved printers and settings
+      - ${DATA_LOCATION}/temp_scans:/app/scans                # the temporary scan folder, emptied by every scan
+      - ${DATA_LOCATION}/scans:/app/storage                   # finished scans: same path inside and out
+      - /run/avahi-daemon:/run/avahi-daemon:ro                # the backends find scanners through Avahi
+      - /run/dbus:/run/dbus:ro                                # hpaio and Avahi's D-Bus clients
+      # HP's own scanner backend (hpaio) needs the plugin that `hp-plugin` installed on the host: the
+      # container only has the Debian packages. Without these two, HP devices fail with "Error during
+      # device I/O". Long form, so that Compose stops with an error if they are missing here (the short
+      # form would create them as root-owned folders). Delete both if you don't use HP's plugin.
+      - type: bind
+        source: /usr/share/hplip/scan/plugins
+        target: /usr/share/hplip/scan/plugins
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/hp/hplip.state
+        target: /var/lib/hp/hplip.state
+        read_only: true
+        bind:
+          create_host_path: false
+
+  # Serves port 80 on the host and forwards it to the app (see Caddyfile)
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - scanner-web
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE    # the only thing it needs: port 80
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro

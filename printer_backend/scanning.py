@@ -18,7 +18,7 @@ OPEN_FAILED = 'open of device'    # how scanimage reports that, nothing was scan
 AVAILABLE_TIMEOUT = 15    # seconds for a whole availability check, enough for all the retries
 KILL_WAIT = 1             # seconds to wait for a killed process, see Printer._load_options_per_source
 SCAN_FORMATS = ('tiff', 'pnm', 'png', 'jpeg', 'pdf')
-SCAN_FOLDER_DEFAULT = './scans'
+SCAN_FOLDER_DEFAULT = './data/scans'
 SCAN_KNOWN_KEYWORDS = {
     'flatbed': ['Flatbed'],                                     # can only scan one side at a time 
     'document-feeder': ['ADF', 'Automatic Document Feeder'],    # serves a stream of pages, only one sided

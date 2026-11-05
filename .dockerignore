@@ -1,0 +1,5 @@
+# Only what the image needs, so saved printers, scans, .git and .venv stay out of it
+*
+!printer_backend/
+!web_frontend/
+**/__pycache__/
