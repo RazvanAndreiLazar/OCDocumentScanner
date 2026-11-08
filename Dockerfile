@@ -9,6 +9,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends sane-utils sane-airscan libsane-hpaio hplip-data \
     && rm -rf /var/lib/apt/lists/*
 
+# Printing (see printer_backend/printing.py). cups-client and cups-ipp-utils (ippfind, ipptool) talk to the
+# CUPS container through its socket. LibreOffice turns office documents into PDF, with metric-compatible fonts
+# so that the layout matches what the user saw. libnss-mdns resolves the printers' .local names through Avahi.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cups-client cups-ipp-utils libnss-mdns \
+        libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui \
+        fonts-liberation2 fonts-dejavu-core \
+    && sed -i 's/^hosts:.*/hosts: files mdns4_minimal [NOTFOUND=return] dns/' /etc/nsswitch.conf \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY printer_backend/requirements.txt backend-requirements.txt
@@ -21,8 +31,8 @@ COPY web_frontend web_frontend
 # docker-compose.yaml mounts these two; they exist so the image also starts without it.
 # Named "app" because sane-utils already creates a group called "scanner".
 RUN useradd --uid 1000 --create-home app \
-    && mkdir data scans storage \
-    && chown app:app data scans storage
+    && mkdir -p data/prints scans storage \
+    && chown app:app data data/prints scans storage
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

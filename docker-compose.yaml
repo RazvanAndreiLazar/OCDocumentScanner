@@ -8,6 +8,9 @@ services:
     image: ghcr.io/razvanandreilazar/ocdocumentscanner:latest
     restart: unless-stopped
     init: true    # collects the scanimage processes left behind when one is killed
+    depends_on:
+      cups:
+        condition: service_healthy    # the print server must answer before the app starts
 
     # for finding scanners on the LAN
     network_mode: host
@@ -22,17 +25,19 @@ services:
     # where the scans would be lost with it
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=512m     # uploads being read, the LibreOffice profile and the printing conversions
 
     environment:
       WEB_HOST: ${WEB_HOST:-127.0.0.1}    # only the proxy on this machine reaches the app
       WEB_PORT: ${WEB_PORT:-8000}
       WEB_ALLOWED_HOSTS: ${WEB_ALLOWED_HOSTS:-*}
       SAVE_ROOT: /app/storage    # save locations are folders inside the mounted one; relative ones are appended to it
+      CUPS_SERVER: /run/cups/cups.sock    # the print server, see the cups service
 
     volumes:
       - ${DATA_LOCATION}/data:/app/data                       # saved printers and settings
       - ${DATA_LOCATION}/scans:/app/storage                   # finished scans: same path inside and out
+      - cups-socket:/run/cups                                 # the socket of the print server, and nothing else of it
       - /run/avahi-daemon:/run/avahi-daemon:ro                # the backends find scanners through Avahi
       - /run/dbus:/run/dbus:ro                                # hpaio and Avahi's D-Bus clients
       # HP's own scanner backend (hpaio) needs the plugin that `hp-plugin` installed on the host: the
@@ -51,6 +56,55 @@ services:
         read_only: true
         bind:
           create_host_path: false
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Prints the files the app uploads. Only its socket is shared with the app (cups-socket): it listens on nothing else.
+  cups:
+    build: ./cups
+    image: ghcr.io/razvanandreilazar/ocdocumentscanner-cups:latest
+    restart: unless-stopped
+    init: true
+
+    # to reach the printers, and to resolve their .local names through Avahi
+    network_mode: host
+
+    environment:
+      CUPS_SERVER: /run/cups/cups.sock    # lpstat in the health check talks to the same socket
+
+    # cupsd runs as root and drops to other users for the filters; these are what it needs for that, and no more
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+    security_opt:
+      - no-new-privileges:true
+    # the spool and the cache are queues that are rebuilt on demand, so they don't need to survive a restart
+    tmpfs:
+      - /var/spool/cups
+      - /var/cache/cups
+      - /tmp
+
+    volumes:
+      - cups-socket:/run/cups
+      - /run/avahi-daemon:/run/avahi-daemon:ro
+      - /run/dbus:/run/dbus:ro
+
+    healthcheck:
+      test: ["CMD", "lpstat", "-r"]     # 'scheduler is running' when the socket answers
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
     logging:
       driver: json-file
@@ -89,3 +143,4 @@ services:
 volumes:
   proxy_data:
   proxy_config:
+  cups-socket:      # the CUPS socket, shared by the cups service and scanner-web

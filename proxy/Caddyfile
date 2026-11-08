@@ -27,9 +27,18 @@
 	}
 }
 
+# The app refuses print uploads over 50 MiB (printing.MAX_UPLOAD_BYTES), but only after the whole request has
+# been read into its /tmp, so bigger requests are stopped here first. A little above 50 MiB, for the form around the file.
+(upload_limit) {
+	request_body {
+		max_size 51MB
+	}
+}
+
 {$SCANNER_DOMAIN} {
 	bind 192.168.0.250
 	import security_headers
+	import upload_limit
 	reverse_proxy 127.0.0.1:8000
 }
 
@@ -46,5 +55,6 @@ http://192.168.0.250 http://scanner.lazar http://{$SCANNER_DOMAIN} {
 http://192.168.0.250:8080 http://scanner.local {
 	bind 192.168.0.250
 	import security_headers
+	import upload_limit
 	reverse_proxy 127.0.0.1:8000
 }
