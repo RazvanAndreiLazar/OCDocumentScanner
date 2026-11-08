@@ -1,0 +1,11 @@
+{# Shows what a press switches to. app.js copies data-current to <html> after the server saved it. #}
+{% set next = 'light' if theme == 'dark' else 'dark' %}
+<button id="theme-toggle" type="button" class="theme-toggle" data-current="{{ theme }}"
+        aria-label="Switch to {{ next }} colours" title="Switch to {{ next }} colours"
+        hx-post="/settings/theme" hx-vals='{"theme": "{{ next }}"}' hx-target="this" hx-swap="outerHTML">
+  {% if next == 'dark' %}
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A9 9 0 0 1 9.5 3a9 9 0 1 0 11.5 11.5z"/></svg>
+  {% else %}
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4M4.2 4.2 7 7M17 17l2.8 2.8M4.2 19.8 7 17M17 7l2.8-2.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  {% endif %}
+</button>

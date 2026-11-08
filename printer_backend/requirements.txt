@@ -1,0 +1,2 @@
+# Python packages of printer_backend. The rest of it is the standard library.
+img2pdf==0.6.1    # builds the PDFs

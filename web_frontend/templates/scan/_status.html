@@ -1,0 +1,77 @@
+{# The whole status of the scan. It polls itself only while the scan is going on: the last answer has no trigger. #}
+{% set job = scan_job %}
+<div id="scan-status"
+     {% if job %}data-state="{{ job.state }}"{% endif %}
+     {% if job and job.percent is not none %}data-percent="{{ job.percent }}"{% endif %}
+     {% if job and job.active %}hx-get="/scan/status" hx-trigger="every {{ 3 if job.state == 'waiting' else 1 }}s" hx-swap="outerHTML"{% endif %}>
+{% if not job %}
+  <p>There is no scan.</p>
+{% else %}
+  {% if job.state == 'running' %}
+    <h1>Scanning</h1>
+    <p class="percent" role="status">
+      {%- if job.percent is not none %}{{ job.percent|round|int }}%{% if job.pages %}, {% endif %}{% endif %}
+      {%- if job.pages %}{{ job.pages }} page{{ '' if job.pages == 1 else 's' }} done{% endif -%}
+    </p>
+
+  {% elif job.state == 'waiting' %}
+    {% if job.question == 'flip' %}
+      <h1>Turn the stack around</h1>
+      <form class="stack" hx-post="/scan/answer" hx-target="#scan-status" hx-swap="outerHTML">
+        <input type="hidden" name="prompt_id" value="{{ job.prompt_id }}">
+        <button name="reply" value="true" class="button button--primary">Continue</button>
+      </form>
+    {% else %}
+      <h1>Place the next page</h1>
+      <p>{{ job.pages }} page{{ '' if job.pages == 1 else 's' }} scanned so far.</p>
+      <form class="button-row" hx-post="/scan/answer" hx-target="#scan-status" hx-swap="outerHTML">
+        <input type="hidden" name="prompt_id" value="{{ job.prompt_id }}">
+        <button name="reply" value="true" class="button button--primary">Scan it</button>
+        <button name="reply" value="false" class="button button--secondary">Finish</button>
+      </form>
+    {% endif %}
+
+  {% elif job.state == 'saving' %}
+    <h1>Saving</h1>
+
+  {% elif job.state == 'saved' %}
+    {% if job.saved %}
+      <h1>Saved</h1>
+      <ul class="saved-files">{% for file in job.saved %}<li>{{ file }}</li>{% endfor %}</ul>
+      <small>in {{ job.storage }}</small>
+      {# static/app.js does the work: it has to know that the file arrived before deleting it from the server #}
+      <div id="scan-download" class="stack" data-url="/scan/{{ job.id }}/download" data-delete-url="/scan/{{ job.id }}/delete" data-name="{{ job.download_name }}">
+        <div><button type="button" class="button button--secondary" data-download="keep">Download to this device</button></div>
+        <div><button type="button" class="button button--danger" data-download="delete">Download and delete from the server</button></div>
+        <div id="scan-download-message" class="small" role="status" hidden></div>
+      </div>
+    {% else %}
+      <h1>Downloaded</h1>
+      <p>The scan was deleted from the server.</p>
+    {% endif %}
+    <div><a href="/" class="button button--primary">Back to printers</a></div>
+
+  {% elif job.state == 'save_failed' %}
+    <h1>The scan couldn't be saved</h1>
+    <p class="message" role="alert">{{ job.error }}</p>
+    <p>Starting another scan deletes it.</p>
+    <div><button class="button button--primary" hx-post="/scan/save" hx-target="#scan-status" hx-swap="outerHTML">Try again</button></div>
+
+  {% elif job.state == 'failed' %}
+    <h1>The scan failed</h1>
+    <p class="message" role="alert">{{ job.error }}</p>
+    <div><a href="/" class="button button--primary">Back to printers</a></div>
+
+  {% elif job.state == 'cancelled' %}
+    <h1>Cancelled</h1>
+    <div><a href="/" class="button button--primary">Back to printers</a></div>
+  {% endif %}
+
+  {% if job.state in ('running', 'waiting') %}
+    <div><button class="button button--quiet" hx-post="/scan/cancel" hx-target="#scan-status" hx-swap="outerHTML"
+            hx-confirm="Stop the scan?">Cancel</button></div>
+  {% endif %}
+
+  {% if job.log %}<details id="scan-log"><summary>Output</summary><pre>{{ job.log }}</pre></details>{% endif %}
+{% endif %}
+</div>

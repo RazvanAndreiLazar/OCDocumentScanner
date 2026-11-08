@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Scanner{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <script src="{{ url_for('static', path='vendor/htmx.min.js') }}"></script>
+  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+</head>
+<body>
+  <header class="frame">
+    <div class="frame-inner">
+      <a class="wordmark" href="/">
+        {# the corner mark of a flatbed, that says where to lay the page #}
+        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0h10L0 10z"/></svg>
+        Scanner
+      </a>
+    </div>
+    {% include "settings/_theme_toggle.html" %}
+    <div class="ruler"></div>
+  </header>
+  {% block banner %}{% include "scan/_banner.html" %}{% endblock %}
+  <main class="paper {% block paper_class %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

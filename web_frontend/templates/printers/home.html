@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block paper_class %}paper--warm-up{% endblock %}
+{% block content %}
+<h1>Scan a document</h1>
+
+<div class="picker" id="picker">
+  <div class="field">
+    <span class="field-label" id="picker-label">Printer</span>
+    <div class="picker-slot">
+      {% if printers %}
+        <ul class="picker-list" aria-labelledby="picker-label">
+          {% for printer in printers %}
+            <li>
+              <button type="button" class="picker-option" title="{{ printer.device }}"
+                      aria-current="{{ 'true' if loop.first else 'false' }}"
+                      {% if loop.first %}aria-expanded="false"{% endif %}
+                      data-device-id="{{ printer.id }}" data-scan-url="/printers/{{ printer.id }}">
+                <span class="picker-name">{{ printer.device|device_name }}</span>
+                {% with state = checking, device_id = printer.id %}{% include "printers/_availability.html" %}{% endwith %}
+                <span class="picker-mark" aria-hidden="true"></span>
+              </button>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="picker-empty">No printers added yet</div>
+      {% endif %}
+    </div>
+  </div>
+  <div id="picker-message"></div>
+</div>
+
+<div class="stack">
+  {% if printers %}
+    <a id="scan-link" class="button button--primary" href="/printers/{{ printers[0].id }}">Scan</a>
+  {% else %}
+    <button class="button button--primary" disabled>Scan</button>
+  {% endif %}
+  <a class="button button--secondary" href="/printers/discover">Search for a new printer</a>
+</div>
+{% endblock %}
