@@ -10,10 +10,12 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from printer_backend.printer_repository import PrinterRepository
+from printer_backend.printing import clean_prints_folder
 from printer_backend.scanning import init
 from printer_backend.settings_repository import SettingsRepository
 from web_frontend.device_ids import device_name
-from web_frontend.routes import printers, scanning, settings as settings_routes
+from web_frontend.print_job import PrintManager
+from web_frontend.routes import printers, printing, scanning, settings as settings_routes
 from web_frontend.scan_job import ScanManager
 
 HERE = Path(__file__).parent
@@ -32,13 +34,16 @@ def create_app(repository: PrinterRepository | None = None, settings: SettingsRe
             await init()
         except RuntimeError as error:   # scanimage missing: the pages still open, scanning reports it
             print(f'Warning: {error}')
+        await clean_prints_folder()         # the uploads of a previous run are not needed anymore
         yield
         await app.state.scans.shutdown()    # stops the running scanimage
+        await app.state.prints.shutdown()   # stops following the print jobs (CUPS keeps printing them)
 
     app = FastAPI(lifespan=lifespan)
     app.state.repository = PrinterRepository() if repository is None else repository
     app.state.settings = SettingsRepository() if settings is None else settings
     app.state.scans = ScanManager()
+    app.state.prints = PrintManager()
     # every page shows a banner while a scan is going on, wherever the user navigated to, and has the saved colours
     app.state.templates = Jinja2Templates(directory=HERE / 'templates', context_processors=[
         lambda request: {'scan_job': request.app.state.scans.job, 'theme': request.app.state.settings.theme}])
@@ -68,5 +73,6 @@ def create_app(repository: PrinterRepository | None = None, settings: SettingsRe
 
     app.include_router(printers.router)
     app.include_router(scanning.router)
+    app.include_router(printing.router)
     app.include_router(settings_routes.router)
     return app

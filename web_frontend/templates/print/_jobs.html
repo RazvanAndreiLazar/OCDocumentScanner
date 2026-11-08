@@ -1,0 +1,26 @@
+{# The print jobs. It polls itself only while a job is going on, like the scan status does. #}
+<div id="print-jobs" class="stack"
+     {% if jobs and jobs|selectattr('active')|list %}hx-get="/print/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{% if jobs %}
+  <h2>Print jobs</h2>
+  <ul class="rows">
+    {% for job in jobs %}
+      <li class="print-job" data-state="{{ job.state }}">
+        <div>
+          <strong>{{ job.name }}</strong>
+          <small>{{ job.copies }} cop{{ 'y' if job.copies == 1 else 'ies' }}, {{ sides_labels.get(job.sides, job.sides) }}, {{ color_labels.get(job.color_mode, job.color_mode) }}</small>
+          <div class="small">{{ job.label }}{% if job.reason and job.active %}: {{ job.reason }}{% endif %}</div>
+          {% if job.state == 'failed' %}<p class="message" role="alert">{{ job.error }}</p>{% endif %}
+        </div>
+        {% if job.cancellable %}
+          <button class="button button--danger button--small" hx-post="/print/{{ job.id }}/cancel" hx-target="#print-jobs" hx-swap="outerHTML"
+                  hx-confirm="Cancel printing '{{ job.name }}'?" title="Cancel printing"
+                  aria-label="Cancel printing '{{ job.name }}'">
+            <span class="icon-cancel" aria-hidden="true"></span>
+          </button>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+</div>

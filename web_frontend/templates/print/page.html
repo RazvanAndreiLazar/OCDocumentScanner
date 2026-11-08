@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Print · Scanner{% endblock %}
+{% block content %}
+<a class="back" href="/">Back</a>
+<h1>Print a file</h1>
+{% if printer is none %}
+  <p>There is no printer chosen. <a href="/">Choose a printer</a> first.</p>
+{% else %}
+  <small>{{ printer.device|device_name }}</small>
+  {% if problem %}
+    <p class="message" role="alert">{{ problem }}</p>
+    <p>Check that the printer is on and connected, then <a href="/print">try again</a>.</p>
+  {% else %}
+    {% include "print/_form.html" %}
+  {% endif %}
+{% endif %}
+<hr class="divider">
+{% include "print/_jobs.html" %}
+{% endblock %}

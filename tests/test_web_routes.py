@@ -19,6 +19,7 @@ from web_frontend.device_ids import device_name, device_to_id, id_to_device
 from printer_backend.options import parse_help
 from printer_backend.printer import Printer
 from printer_backend.printer_repository import PrinterRepository
+from printer_backend.printing import COPIES_MAX, JOB_COMPLETED, JOB_PENDING, JobState, PrintCapabilities
 from printer_backend.scanning import Done, NEXT_PAGE, NeedsInput, PageScanned
 from printer_backend.settings_repository import SettingsRepository
 from printer_backend.storage import LocalFolderStorage
@@ -63,9 +64,11 @@ class WebTestCase(unittest.TestCase):
         printer.select_source('Flatbed')
         self.repository.add_printer(printer)
 
-        patch = mock.patch('web_frontend.app.init', mock.AsyncMock())
-        patch.start()
-        self.addCleanup(patch.stop)
+        # the app empties the prints folder at startup: not the real one, which may hold files being printed
+        for patch in (mock.patch('web_frontend.app.init', mock.AsyncMock()),
+                      mock.patch('web_frontend.app.clean_prints_folder', mock.AsyncMock())):
+            patch.start()
+            self.addCleanup(patch.stop)
         # entered: background scans only keep running while the client's event loop does
         self.client = TestClient(create_app(self.repository, self.settings))
         self.client.__enter__()
@@ -707,3 +710,176 @@ class WebSettingsTest(WebTestCase):
                 self.assertEqual(response.status_code, 422)
                 self.assertIn("Can't save in", html.unescape(response.text))
                 self.assertEqual(str(self.settings.save_location), before)
+
+
+@unittest.skipIf(TestClient is None, 'fastapi is not installed')
+class PrintRoutesTest(WebTestCase):
+    """The print page with CUPS replaced by fakes: the backend tests cover what the commands get and say."""
+    PDF = b'%PDF-1.4\n%fake page\n'
+    QUEUE = 'ocds-e5a37fdbe391'
+    JOB = QUEUE + '-12'
+    URI = 'ipp://HPA8B13B03755A.local:631/ipp/print'
+    ALL_OPTIONS = PrintCapabilities(['one-sided', 'two-sided-long-edge', 'two-sided-short-edge'], 'one-sided',
+                                    ['monochrome', 'color'], 'color')
+    SIMPLEX_MONO = PrintCapabilities(['one-sided'], 'one-sided', ['monochrome'], 'monochrome')
+
+    def setUp(self):
+        super().setUp()
+        self.prints = self.folder / 'prints'
+        self.capabilities = self.ALL_OPTIONS
+        self.state = JOB_COMPLETED
+        self.submit = mock.AsyncMock(return_value=self.JOB)
+        self.cancel_cups_job = mock.AsyncMock()
+        fakes = {
+            'printer_backend.printing.PRINT_FOLDER_DEFAULT': str(self.prints),
+            'web_frontend.routes.printing.ensure_queue': mock.AsyncMock(return_value=(self.QUEUE, self.URI)),
+            'web_frontend.routes.printing.printer_capabilities': mock.AsyncMock(side_effect=self.get_capabilities),
+            'web_frontend.print_job.convert_for_print': mock.AsyncMock(side_effect=lambda path: path),
+            'web_frontend.print_job.submit': self.submit,
+            'web_frontend.print_job.job_state': mock.AsyncMock(side_effect=lambda job: JobState(self.state, '')),
+            'web_frontend.print_job.cancel_cups_job': self.cancel_cups_job,
+            'web_frontend.print_job.PRINT_POLL_SECONDS': 0.01,
+        }
+        for target, replacement in fakes.items():
+            patch = mock.patch(target, replacement)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    async def get_capabilities(self, queue):
+        return self.capabilities
+
+    def upload(self, name='a.pdf', content=None, **form):
+        data = {'copies': '1', **form}
+        return self.client.post('/print', data=data,
+                                files={'file': (name, self.PDF if content is None else content, 'application/pdf')})
+
+    def job_folder_contents(self) -> list:
+        return sorted(self.prints.rglob('*')) if self.prints.exists() else []
+
+    def wait_until(self, check, description):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if check():
+                return
+            time.sleep(0.02)
+        self.fail(f'never got to: {description}')
+
+    def last_job(self):
+        return self.client.app.state.prints.jobs[0]
+
+    def test_page_without_a_printer_says_so(self):
+        response = self.client.get('/print')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('There is no printer chosen', response.text)
+
+    def test_page_offers_the_printers_own_options(self):
+        self.settings.active_printer = DEVICE
+        page = self.client.get('/print').text
+        self.assertIn('<select name="sides">', page)
+        self.assertIn('Two sides, long edge', page)
+        self.assertIn('Black and white', page)
+
+        self.capabilities = self.SIMPLEX_MONO
+        page = self.client.get('/print').text
+        self.assertNotIn('name="sides"', page.replace('<input type="hidden" name="sides"', ''))
+        self.assertIn('<input type="hidden" name="sides" value="one-sided">', page)
+        self.assertIn('<input type="hidden" name="color_mode" value="monochrome">', page)
+
+    def test_printer_that_does_not_answer_is_shown_on_the_page(self):
+        self.settings.active_printer = DEVICE
+        with mock.patch('web_frontend.routes.printing.ensure_queue',
+                        mock.AsyncMock(side_effect=RuntimeError("Could not find this printer's print service"))):
+            page = self.client.get('/print').text
+        self.assertIn("Could not find this printer's print service", html.unescape(page))
+        self.assertNotIn('type="file"', page)
+
+    def test_upload_without_an_active_printer_is_refused(self):
+        response = self.upload()
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('Choose a printer first', response.text)
+        self.assertEqual(self.client.app.state.prints.jobs, [])
+
+    def test_wrong_file_type_is_refused_and_nothing_is_kept(self):
+        self.settings.active_printer = DEVICE
+        response = self.upload('program.exe', b'MZ\x90\x00')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("can't be printed", html.unescape(response.text))
+        self.assertEqual(self.job_folder_contents(), [])
+
+    def test_zip_named_like_a_pdf_is_refused(self):
+        self.settings.active_printer = DEVICE
+        response = self.upload('a.pdf', b'PK\x03\x04' + b'\x00' * 30)
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('is not a real .pdf', response.text)
+        self.assertEqual(self.job_folder_contents(), [])
+
+    def test_file_over_the_limit_is_refused_and_leaves_no_file(self):
+        self.settings.active_printer = DEVICE
+        with mock.patch('printer_backend.printing.MAX_UPLOAD_BYTES', 1000):
+            response = self.upload('big.pdf', self.PDF + b'0' * 2000)
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('larger than', response.text)
+        self.assertEqual(self.job_folder_contents(), [])
+
+    def test_copies_outside_the_range_are_refused(self):
+        self.settings.active_printer = DEVICE
+        for copies in ('0', str(COPIES_MAX + 1), '2.5', 'many'):
+            with self.subTest(copies):
+                response = self.upload(copies=copies)
+                self.assertEqual(response.status_code, 422)
+                self.assertIn('copies', response.text)
+        self.assertEqual(self.client.app.state.prints.jobs, [])
+
+    def test_option_the_printer_lacks_is_refused(self):
+        self.settings.active_printer = DEVICE
+        self.capabilities = self.SIMPLEX_MONO
+        response = self.upload(sides='two-sided-long-edge')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("can't do 'two-sided-long-edge'", html.unescape(response.text))
+        self.assertEqual(self.job_folder_contents(), [])
+
+    def test_printer_that_cannot_be_reached_keeps_no_file(self):
+        self.settings.active_printer = DEVICE
+        with mock.patch('web_frontend.routes.printing.ensure_queue',
+                        mock.AsyncMock(side_effect=RuntimeError("Could not find this printer's print service"))):
+            response = self.upload()
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.job_folder_contents(), [])
+
+    def test_good_upload_is_printed_and_its_files_are_removed(self):
+        self.settings.active_printer = DEVICE
+        response = self.upload(copies='2', sides='two-sided-long-edge', color_mode='monochrome')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['HX-Redirect'], '/print')
+
+        self.wait_until(lambda: self.last_job().state == 'completed', 'a completed job')
+        self.assertIn('Printed', self.client.get('/print/status').text)
+        self.assertEqual(self.job_folder_contents(), [])
+        self.assertEqual(self.submit.await_args.args[0], self.QUEUE)
+        self.assertEqual(self.submit.await_args.args[3:], (2, 'two-sided-long-edge', 'monochrome'))
+
+    def test_options_left_out_of_the_form_take_the_printers_defaults(self):
+        self.settings.active_printer = DEVICE
+        self.upload()
+        self.wait_until(lambda: self.last_job().state == 'completed', 'a completed job')
+        self.assertEqual(self.submit.await_args.args[3:], (1, 'one-sided', 'color'))
+
+    def test_job_that_waits_can_be_cancelled(self):
+        self.settings.active_printer = DEVICE
+        self.state = JOB_PENDING
+        self.upload()
+        job = self.last_job()
+        self.wait_until(lambda: job.state == 'queued', 'a queued job')
+        self.assertIn('Waiting for the printer', self.client.get('/print/status').text)
+
+        response = self.client.post(f'/print/{job.id}/cancel')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(job.state, 'canceled')
+        self.assertIn('Cancelled', response.text)
+        self.cancel_cups_job.assert_awaited_once_with(self.JOB)
+
+    def test_stale_job_id_is_refused(self):
+        response = self.client.post('/print/0123456789abcdef/cancel')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("isn't listed anymore", html.unescape(response.text))
+

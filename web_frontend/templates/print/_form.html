@@ -1,0 +1,40 @@
+{# The options come from the printer's queue: a choice the printer doesn't have is not offered, and one with a single value is shown as text. #}
+<form class="stack" hx-post="/print" hx-target="#form-message" hx-swap="innerHTML" hx-encoding="multipart/form-data" hx-disabled-elt="find button">
+  <label class="field">
+    <span class="field-label">File</span>
+    <input type="file" name="file" required accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.odt,.ods,.odp,.doc,.xls,.ppt,.txt,.rtf">
+    <small>Up to 50 MiB. PDF, images, Word, Excel, PowerPoint, OpenDocument, text and RTF.</small>
+  </label>
+
+  <div class="field-row">
+    <label class="field">
+      <span class="field-label">Copies</span>
+      <input type="number" name="copies" value="1" min="1" max="{{ capabilities.copies_max }}" required>
+    </label>
+
+    {% if capabilities.sides|length > 1 %}
+      <label class="field">
+        <span class="field-label">Sides</span>
+        <select name="sides">
+          {% for side in capabilities.sides %}<option value="{{ side }}" {{ 'selected' if side == capabilities.sides_default }}>{{ sides_labels.get(side, side) }}</option>{% endfor %}
+        </select>
+      </label>
+    {% else %}
+      <input type="hidden" name="sides" value="{{ capabilities.sides[0] }}">
+    {% endif %}
+  </div>
+
+  {% if capabilities.color_modes|length > 1 %}
+    <label class="field">
+      <span class="field-label">Colour</span>
+      <select name="color_mode">
+        {% for mode in capabilities.color_modes %}<option value="{{ mode }}" {{ 'selected' if mode == capabilities.color_default }}>{{ color_labels.get(mode, mode) }}</option>{% endfor %}
+      </select>
+    </label>
+  {% else %}
+    <input type="hidden" name="color_mode" value="{{ capabilities.color_modes[0] }}">
+  {% endif %}
+
+  <div id="form-message"></div>
+  <button type="submit" class="button button--primary">Print</button>
+</form>

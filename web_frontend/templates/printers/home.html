@@ -33,6 +33,7 @@
 <div class="stack">
   {% if printers %}
     <a id="scan-link" class="button button--primary" href="/printers/{{ printers[0].id }}">Scan</a>
+    <a class="button button--secondary" href="/print">Print a file</a>
   {% else %}
     <button class="button button--primary" disabled>Scan</button>
   {% endif %}

@@ -218,6 +218,8 @@ a { color: var(--color-primary); }
 .button--danger { border-color: var(--color-alert); color: var(--color-alert); }
 .button--danger:hover { background: var(--color-alert); color: var(--on-color); }
 .button--small { font-size: var(--text-small); }
+.icon-cancel { display: inline-block; width: 1.25rem; height: 1.25rem; background: currentColor;
+  -webkit-mask: url(/static/cancel.png) center / contain no-repeat; mask: url(/static/cancel.png) center / contain no-repeat; }
 .button:disabled { background: var(--rule); color: var(--muted); border-color: transparent; cursor: not-allowed; }
 /* The keep button keeps its natural size; the column takes that width, and the delete button is
    stretched to it (width 0 means its long label doesn't widen the column, min-width fills the column) */
@@ -351,6 +353,8 @@ details[open] summary { margin-bottom: var(--space-3); }
 .row .row-action::after { content: 'Add'; }
 .row.htmx-request .row-action::after { content: 'Adding…'; }
 .row:disabled { cursor: progress; }
+/* a print job: its text, and its cancel button beside it */
+.print-job { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding-block: var(--space-2); }
 
 /* ---------- 12. Waiting for something ---------- */
 .spinner { display: none; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-small); }
