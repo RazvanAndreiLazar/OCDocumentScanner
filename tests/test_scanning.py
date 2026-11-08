@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import io
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -612,6 +613,105 @@ class IsAvailableTest(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(printer_module, 'AVAILABLE_TIMEOUT', 0.01), \
              mock.patch.object(printer_module, 'KILL_WAIT', 0.01):
             self.assertFalse(await asyncio.wait_for(Printer('dev').is_available(), 5))
+        proc.kill.assert_called_once()
+
+
+class StuckProcess():
+    '''A scanimage that ignores terminate and never exits, with a pipe that is never closed.'''
+    def __init__(self):
+        self.returncode = None
+        self.calls = []
+        self.stdout = self
+
+    def terminate(self):
+        self.calls.append('terminate')
+
+    def kill(self):
+        self.calls.append('kill')
+
+    async def wait(self):
+        await asyncio.Event().wait()
+
+    async def read(self, size):
+        await asyncio.Event().wait()
+
+
+class StopProcessTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patch = mock.patch.object(scanning, 'KILL_WAIT', 0.01)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    async def test_stuck_process_is_killed_without_waiting_for_ever(self):
+        proc = StuckProcess()
+        await asyncio.wait_for(scanning.stop_process(proc), 5)
+        self.assertEqual(proc.calls, ['kill'])
+
+    async def test_graceful_stop_falls_back_to_kill(self):
+        proc = StuckProcess()
+        await asyncio.wait_for(scanning.stop_process(proc, graceful=True), 5)
+        self.assertEqual(proc.calls, ['terminate', 'kill'])
+
+    async def test_finished_process_is_left_alone(self):
+        proc = StuckProcess()
+        proc.returncode = 0
+        await scanning.stop_process(proc)
+        self.assertEqual(proc.calls, [])
+
+    async def test_cancelling_a_scan_that_ignores_terminate_doesnt_hang(self):
+        proc = StuckProcess()
+        with mock.patch.object(scanning.subprocess, 'create_subprocess_exec', mock.AsyncMock(return_value=proc)):
+            events = scanning.run_command('scanimage')
+            task = asyncio.create_task(anext(events))
+            await asyncio.sleep(0.01)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await asyncio.wait_for(events.aclose(), 5)
+        self.assertEqual(proc.calls, ['terminate', 'kill'])
+
+
+class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
+    '''Printer.discover_printers against a real child process, since the problems are about its pipes.'''
+    def fake_scanimage(self, script: str):
+        real = asyncio.create_subprocess_exec   # printer_module.asyncio is this same module, patched below
+
+        async def start(*args, **kwargs):
+            return await real(sys.executable, '-c', script, **kwargs)
+        patch = mock.patch.object(printer_module.asyncio, 'create_subprocess_exec', start)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    async def test_lists_devices(self):
+        self.fake_scanimage("print(\"device `a' is a X\")")
+        self.assertEqual(await Printer.discover_printers(), ["device `a' is a X\n"])
+
+    async def test_a_lot_of_stderr_doesnt_block_it(self):
+        self.fake_scanimage("import sys; sys.stderr.write('x' * 1_000_000); print('device')")
+        self.assertEqual(await asyncio.wait_for(Printer.discover_printers(), 10), ['device\n'])
+
+    async def test_failure_reports_stderr(self):
+        self.fake_scanimage("import sys; sys.stderr.write('no backend'); sys.exit(3)")
+        with self.assertRaisesRegex(RuntimeError, r'\(Err Code: 3\)[\s\S]*no backend'):
+            await Printer.discover_printers()
+
+    async def test_hanging_scanimage_times_out_and_is_killed(self):
+        self.fake_scanimage('import time; time.sleep(60)')
+        with mock.patch.object(printer_module, 'DISCOVER_TIMEOUT', 0.2):
+            with self.assertRaisesRegex(RuntimeError, 'timed out'):
+                await asyncio.wait_for(Printer.discover_printers(), 10)
+
+
+class LoadOptionsTimeoutTest(unittest.IsolatedAsyncioTestCase):
+    async def test_stuck_scanimage_times_out_and_is_killed(self):
+        async def never_answers():
+            await asyncio.Event().wait()
+
+        proc = mock.Mock(returncode=None, communicate=never_answers, wait=mock.AsyncMock())
+        with mock.patch.object(printer_module.asyncio, 'create_subprocess_exec', mock.AsyncMock(return_value=proc)), \
+             mock.patch.object(printer_module, 'LOAD_TIMEOUT', 0.01):
+            with self.assertRaisesRegex(RuntimeError, 'timed out'):
+                await Printer('dev').load_options()
         proc.kill.assert_called_once()
 
 

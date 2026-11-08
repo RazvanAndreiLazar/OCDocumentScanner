@@ -9,8 +9,8 @@ import re
 import shutil
 from printer_backend.options import ScanOption, parse_help
 from printer_backend.scanning import (
-    AVAILABLE_TIMEOUT, BACK_PREFIX, DEFAULT_FILE, FLIP, KILL_WAIT, OPEN_ATTEMPTS, OPEN_FAILED, OPEN_RETRY_DELAY, NEXT_PAGE, PAGE_FORMAT, PAGE_PREFIX, SCAN_FOLDER_DEFAULT, SCAN_FORMATS,
-    Done, NeedsInput, PageScanned, Progress, run_command, source_kind)
+    AVAILABLE_TIMEOUT, BACK_PREFIX, DEFAULT_FILE, DISCOVER_TIMEOUT, FLIP, KILL_WAIT, LOAD_TIMEOUT, OPEN_ATTEMPTS, OPEN_FAILED, OPEN_RETRY_DELAY, NEXT_PAGE, PAGE_FORMAT, PAGE_PREFIX, SCAN_FOLDER_DEFAULT, SCAN_FORMATS,
+    Done, NeedsInput, PageScanned, Progress, read_text, run_command, source_kind, stop_process)
 
 NO_SOURCE = ''    # key used for devices that have no 'source' option
 
@@ -85,14 +85,12 @@ class Printer():
                                                     stderr=subprocess.PIPE,
                                                     stdout=subprocess.PIPE)
         try:
-            stdout, stderr = await proc.communicate()
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), LOAD_TIMEOUT)
+        except TimeoutError:
+            raise RuntimeError(f'Reading options timed out after {LOAD_TIMEOUT} s') from None
         finally:
-            # cancelled (e.g. by a timeout): kill, because a stuck scanimage may not react to terminate
-            if proc.returncode is None:
-                proc.kill()
-                # limited: wait() also waits for the pipes, which a child of scanimage may still hold
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(proc.wait(), KILL_WAIT)
+            # also when cancelled (e.g. by a timeout): kill, because a stuck scanimage may not react to terminate
+            await stop_process(proc)
         if proc.returncode != 0:
             raise RuntimeError(f'Reading options failed (Err Code: {proc.returncode})\n'
                                f'{stderr.decode(errors="replace")}')
@@ -343,21 +341,33 @@ class Printer():
     '''
     @staticmethod
     async def discover_printers():
-        proc = await asyncio.create_subprocess_exec('scanimage', '-L', 
-                                                    stderr=subprocess.PIPE, 
+        proc = await asyncio.create_subprocess_exec('scanimage', '-L',
+                                                    stderr=subprocess.PIPE,
                                                     stdout=subprocess.PIPE)
-
-
+        # stderr is read meanwhile: scanimage blocks once its pipe is full
+        stderr_reader = asyncio.create_task(read_text(proc.stderr))
         output = []
-        while line := await proc.stdout.readline():
-            text = line.decode(errors='replace')
-            # skip the gzip noise printed by the broken escl backend
-            if '�' in text or not text.rstrip().isprintable():
-                continue
-            output.append(text)
+        stderr = ''
+        try:
+            async with asyncio.timeout(DISCOVER_TIMEOUT):
+                while line := await proc.stdout.readline():
+                    text = line.decode(errors='replace')
+                    # skip the gzip noise printed by the broken escl backend
+                    if '�' in text or not text.rstrip().isprintable():
+                        continue
+                    output.append(text)
+                await proc.wait()
+            with suppress(TimeoutError):    # a child of scanimage may hold the pipe
+                stderr = await asyncio.wait_for(asyncio.shield(stderr_reader), KILL_WAIT)
+        except TimeoutError:
+            raise RuntimeError(f'Printer discovery timed out after {DISCOVER_TIMEOUT} s') from None
+        finally:
+            await stop_process(proc)
+            stderr_reader.cancel()
 
-        if await proc.wait() != 0:
-            raise RuntimeError(f'Printer discovery failed (Err Code: {proc.returncode}\nOutput: {''.join(output)}')
+        if proc.returncode != 0:
+            raise RuntimeError(f'Printer discovery failed (Err Code: {proc.returncode})\n'
+                               f'Output: {"".join(output)}{stderr}')
         return output
 
     @staticmethod

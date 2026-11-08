@@ -1,6 +1,7 @@
 import asyncio
 from asyncio import subprocess
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass
 import re
 import sys
@@ -16,7 +17,10 @@ OPEN_ATTEMPTS = 4         # airscan sometimes can't open the device, the next tr
 OPEN_RETRY_DELAY = 3      # seconds
 OPEN_FAILED = 'open of device'    # how scanimage reports that, nothing was scanned at that point
 AVAILABLE_TIMEOUT = 15    # seconds for a whole availability check, enough for all the retries
-KILL_WAIT = 1             # seconds to wait for a killed process, see Printer._load_options_per_source
+KILL_WAIT = 1             # seconds to wait for a stopped process, see stop_process
+LOAD_TIMEOUT = 10         # seconds for one 'scanimage -A', which normally takes well under a second
+DISCOVER_TIMEOUT = 30     # seconds for 'scanimage -L', which takes ~12 s with the slow escl backend
+STDERR_KEPT = 4096        # characters of a command's stderr that are kept for error messages
 SCAN_FORMATS = ('tiff', 'pnm', 'png', 'jpeg', 'pdf')
 SCAN_FOLDER_DEFAULT = './data/scans'
 SCAN_KNOWN_KEYWORDS = {
@@ -24,6 +28,30 @@ SCAN_KNOWN_KEYWORDS = {
     'document-feeder': ['ADF', 'Automatic Document Feeder'],    # serves a stream of pages, only one sided
     'duplex': ['Duplex']                                        # serves a stream of pages, both sides
 }
+
+async def stop_process(proc: subprocess.Process, graceful: bool = False):
+    '''
+    Stops a process that is still running, never waiting for it for long. A stuck scanimage may ignore
+    terminate, and wait() also waits for the pipes, which a child of scanimage may still hold, so the
+    waits are limited. With graceful, terminate comes first and kill only if that doesn't help.
+    '''
+    if proc.returncode is not None:
+        return
+    for signal in (('terminate', 'kill') if graceful else ('kill',)):
+        with suppress(ProcessLookupError):
+            getattr(proc, signal)()
+        try:
+            await asyncio.wait_for(proc.wait(), KILL_WAIT)
+            return
+        except TimeoutError:
+            pass
+
+async def read_text(stream: asyncio.StreamReader, limit: int = STDERR_KEPT) -> str:
+    '''Reads a stream to its end, so the process never blocks on a full pipe, and keeps the start of it.'''
+    kept = bytearray()
+    while chunk := await stream.read(4096):
+        kept += chunk[:max(0, limit - len(kept))]
+    return kept.decode(errors='replace')
 
 def parse_scanimage_version(text: str) -> str | None:
     '''"scanimage (sane-backends) 1.2.1-debian; backend version 1.2.1" -> "1.2.1"'''
@@ -109,6 +137,4 @@ async def run_command(*args) -> AsyncIterator[Progress]:
         if await proc.wait() != 0:
             raise RuntimeError(f"{args[0]} failed ({proc.returncode}): {''.join(output)}")
     finally:
-        if proc.returncode is None:
-            proc.terminate()
-            await proc.wait()
+        await stop_process(proc, graceful=True)
