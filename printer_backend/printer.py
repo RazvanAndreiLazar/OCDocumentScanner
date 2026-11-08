@@ -27,6 +27,8 @@ class Printer():
         # from the feeder), so every source has its own options: {source: {name: ScanOption}}
         self.options: dict[str, dict[str, ScanOption]] = {}
         self.source = NO_SOURCE # the source whose options are shown and edited by default
+        # the IPP address of the printer for printing, found once (see printing.resolve_print_uri); None until then
+        self.print_uri: str | None = None
 
     @property
     def sources(self) -> list[str]:
@@ -43,6 +45,7 @@ class Printer():
             'source': self.source,
             'options': {source: {name: asdict(option) for name, option in options.items()}
                         for source, options in self.options.items()},
+            'print_uri': self.print_uri,
         }
 
     @classmethod
@@ -51,6 +54,7 @@ class Printer():
         printer.options = {source: {name: ScanOption(**option) for name, option in options.items()}
                            for source, options in data['options'].items()}
         printer.source = data['source']
+        printer.print_uri = data.get('print_uri')    # missing in files saved before printing existed
         return printer
 
     async def is_available(self) -> bool:

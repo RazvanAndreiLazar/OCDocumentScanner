@@ -1,0 +1,16 @@
+"/ipp/get-job-state.test":
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://%2Frun%2Fcups%2Fcups.sock:631/printers/ocds-e5a37fdbe391
+        job-id (integer) = 99
+        requesting-user-name (nameWithoutLanguage) = root
+        requested-attributes (1setOf keyword) = job-state,job-state-reasons,job-printer-state-message
+    Get-Job-Attributes                                                   [FAIL]
+        RECEIVED: 114 bytes in response
+        status-code = client-error-not-found (Job #99 does not exist.)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        status-message (textWithoutLanguage) = Job #99 does not exist.
+        EXPECTED: STATUS successful-ok (got client-error-not-found)
+        status-message="Job #99 does not exist."

@@ -13,10 +13,42 @@ The backend does no direct user input or output during a scan. It reports what h
 | `json_file.py` | `read_json` and `write_json`, used by both repositories |
 | `options.py` | `ScanOption` and `parse_help`, the parser for `scanimage` option listings. It runs no commands |
 | `scanning.py` | Constants, scan events, `source_kind`, `run_command`, and the version check `init` |
+| `printing.py` | Printing files through CUPS: which files are accepted, the IPP address of a printer, its CUPS queue, the options it offers, sending a job and following it. See "Printing" below |
 
 `printer.py` imports from `options.py` and `scanning.py`, and they don't import it. `printer_repository.py` imports `printer.py`.
 
-**Requirements:** `scanimage` from `sane-utils`, and `img2pdf` for PDF output (`pip install -r printer_backend/requirements.txt`). The code was written against sane-backends 1.2.1.
+**Requirements:** `scanimage` from `sane-utils`, and `img2pdf` for PDF output (`pip install -r printer_backend/requirements.txt`). The code was written against sane-backends 1.2.1. Printing needs the CUPS client tools (`lp`, `lpstat`, `lpadmin`, `cancel`), `ippfind` and `ipptool` (`cups-ipp-utils`) and `soffice` for office documents; see "Printing".
+
+## Printing
+
+`printing.py` sends a file to a printer through CUPS. The CUPS scheduler runs in its own container (`cups/`) and the commands here reach it through the socket in `CUPS_SERVER`. Each printer gets a driverless IPP Everywhere queue (`lpadmin -m everywhere`), so no driver is installed: CUPS converts the file to what the printer takes.
+
+```python
+from printer_backend import printing
+
+uri = await printing.resolve_print_uri(device)           # the IPP address, from the scanner name (RuntimeError if the printer does not answer)
+queue, uri = await printing.ensure_queue(device, uri)    # the queue, created or fixed if needed
+capabilities = await printing.printer_capabilities(queue) # the sides and colour modes the printer has
+
+printing.check_print_file(path)                          # ValueError unless the content matches the extension
+pdf = await printing.convert_for_print(path)             # office and text files become PDF first
+job = await printing.submit(queue, pdf, 'report.pdf', 2, 'two-sided-long-edge', 'monochrome')
+state = await printing.job_state(job)                    # JobState(state, reason)
+await printing.cancel(job)
+```
+
+- **Formats:** PDF, PNG and JPEG are printed as they are. Office and text files (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt`, `.txt`, `.rtf`) are converted with LibreOffice. Each file's content must match its extension (`PRINT_FORMATS`, `check_print_file`), so a zip renamed to `.pdf` is refused.
+- **Limits:** `MAX_UPLOAD_BYTES` (50 MiB) is the size of an upload, checked by the web front end while it reads it. The proxy (`proxy/Caddyfile`, `upload_limit`) refuses bigger requests before they reach the app, which would otherwise buffer them in its `/tmp` first.
+- **Arguments:** every command is run as an argument list, never through a shell. `submit` checks the copies (1 to `COPIES_MAX`), the sides and the colour mode against allowlists before `lp` runs, and puts `--` before the file.
+- **Addresses:** `resolve_print_uri` maps `airscan:` names to the mDNS service with exactly that name, and `hpaio:`, `hp:` and `escl:` devices to the address in their name. Each address is checked with `ipptool` before it is used. `Printer.print_uri` keeps the address, so discovery doesn't run on every print.
+- **Queues:** `queue_name(device)` is `ocds-` and 12 hex characters of the device's SHA-1, stable for the device. `ensure_queue` does nothing if the queue already prints to the address and is driverless (its make-and-model ends in `IPP Everywhere`). Otherwise it runs `lpadmin -m everywhere`, and looks the address up again once if that fails. A failed `lpadmin` leaves a raw queue behind, so it is removed again (`lpadmin -x`).
+- **Printer options:** `printer_capabilities` asks the CUPS queue for its IPP attributes (`sides-supported`, `print-color-mode-supported`, `copies-supported` and their defaults) with `ipptool` through the CUPS socket. `lpoptions` isn't used: it shows PPD names, and it needs the PPD file, which only root on the CUPS container can read.
+- **Job states:** `job_state` asks CUPS for the job's IPP `job-state` with `ipptool` and `ipp/get-job-state.test`, because `lpstat`'s text can't tell a cancelled job from a printed one. A job CUPS no longer knows counts as completed, because CUPS purges its history after `PreserveJobHistory`.
+- **Conversion:** CUPS turns PDFs and images into what the printer takes. The ENVY 6400 takes URF, PWG raster, JPEG and PCLm, not PDF, so the `cups` package (with `rastertopwg`) is needed in `cups/Dockerfile`, not just `cups-daemon`. CUPS also rotates the back pages of two-sided jobs when the printer asks for that (`cupsBackSide: Rotated` on the ENVY).
+- **Tests:** the fixtures in `tests/fixtures/print/` are real output, captured from cupsd printing to `ippeveprinter` and from the ENVY's own driverless queue.
+- **Folder:** uploads are stored in `PRINT_FOLDER_DEFAULT` (`./data/prints`), in a folder per job. `clean_prints_folder()` empties it at startup. The web front end removes a job's folder once CUPS has accepted the file.
+
+Nothing here talks to the user. The web front end (`web_frontend/print_job.py`) runs the steps as a background job and shows the states.
 
 ## Using a printer
 

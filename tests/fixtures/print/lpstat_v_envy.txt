@@ -1,0 +1,1 @@
+device for ocds-e5a37fdbe391: ipp://HPA8B13B03755A.local:631/ipp/print

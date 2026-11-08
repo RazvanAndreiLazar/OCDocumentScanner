@@ -1,0 +1,15 @@
+"/ipp/get-job-state.test":
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://%2Frun%2Fcups%2Fcups.sock:631/printers/ocds-e5a37fdbe391
+        job-id (integer) = 11
+        requesting-user-name (nameWithoutLanguage) = root
+        requested-attributes (1setOf keyword) = job-state,job-state-reasons,job-printer-state-message
+    Get-Job-Attributes                                                   [PASS]
+        RECEIVED: 117 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-state (enum) = canceled
+        job-state-reasons (keyword) = none

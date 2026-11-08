@@ -1,0 +1,13 @@
+# Asks CUPS for one job's state, for printing.job_state: ipptool -tv -d job_id=N ipp://<CUPS socket>/printers/<queue> this-file
+{
+	NAME "Get-Job-Attributes"
+	OPERATION Get-Job-Attributes
+	GROUP operation-attributes-tag
+	ATTR charset attributes-charset utf-8
+	ATTR naturalLanguage attributes-natural-language en
+	ATTR uri printer-uri $uri
+	ATTR integer job-id $job_id
+	ATTR name requesting-user-name $user
+	ATTR keyword requested-attributes job-state,job-state-reasons,job-printer-state-message
+	STATUS successful-ok
+}
