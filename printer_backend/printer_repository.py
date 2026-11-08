@@ -15,7 +15,8 @@ class PrinterRepository():
         self.printers: dict[str, Printer] = self._load()
 
     def _load(self) -> dict[str, Printer]:
-        return {entry['device']: Printer.from_dict(entry) for entry in read_json(self.path, [])}
+        # a file that can't be read is set aside by read_json: better no printers than an app that doesn't start
+        return read_json(self.path, {}, lambda entries: {entry['device']: Printer.from_dict(entry) for entry in entries})
 
     def _save(self):
         write_json(self.path, [printer.to_dict() for printer in self.printers.values()])

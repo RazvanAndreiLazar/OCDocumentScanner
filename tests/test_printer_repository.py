@@ -163,11 +163,36 @@ class PrinterRepositoryTest(unittest.IsolatedAsyncioTestCase):
             self.repository.update_printer(self.repository.get_printer('dev'))
         run.assert_not_called()
 
-    def test_broken_file_is_not_overwritten(self):
+    def assert_set_aside(self, text):
+        with self.assertLogs('printer_backend.json_file', 'WARNING'):
+            repository = self.reopened()
+        self.assertEqual(repository.get_all_printers(), [])
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(Path(f'{self.path}.broken').read_text(), text)
+        repository.add_printer(make_printer())      # and it works again
+        self.assertEqual(len(self.reopened().get_all_printers()), 1)
+
+    def test_broken_file_is_set_aside(self):
         Path(self.path).write_text('{not json')
-        with self.assertRaises(json.JSONDecodeError):
-            self.reopened()
-        self.assertEqual(Path(self.path).read_text(), '{not json')
+        self.assert_set_aside('{not json')
+
+    def test_truncated_file_is_set_aside(self):
+        self.repository.add_printer(make_printer())
+        text = Path(self.path).read_text()[:20]
+        Path(self.path).write_text(text)
+        self.assert_set_aside(text)
+
+    def test_file_with_old_fields_is_set_aside(self):
+        self.repository.add_printer(make_printer())
+        data = json.loads(Path(self.path).read_text())
+        data[0]['options'][next(iter(data[0]['options']))]['removed_field'] = 1
+        text = json.dumps(data)
+        Path(self.path).write_text(text)
+        self.assert_set_aside(text)
+
+    def test_file_of_the_wrong_kind_is_set_aside(self):
+        Path(self.path).write_text('{"device": "dev"}')
+        self.assert_set_aside('{"device": "dev"}')
 
     async def test_available_printers(self):
         for device in ('on', 'off', 'also on'):

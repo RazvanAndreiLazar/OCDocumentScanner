@@ -315,13 +315,26 @@ class SettingsRepositoryTest(unittest.TestCase):
         SettingsRepository(self.path).save_location = LocalFolderStorage('/some/folder')
         self.assertEqual(json.loads(Path(self.path).read_text())['other'], 1)
 
-    def test_unknown_kind_is_refused_and_the_file_kept(self):
+    def assert_set_aside(self, content):
         os.makedirs(os.path.dirname(self.path))
-        content = '{"save_location": {"type": "ftp"}}'
         Path(self.path).write_text(content)
-        with self.assertRaisesRegex(ValueError, "'ftp'"):
-            SettingsRepository(self.path)
-        self.assertEqual(Path(self.path).read_text(), content)
+        with self.assertLogs('printer_backend.json_file', 'WARNING'):
+            settings = SettingsRepository(self.path)
+        self.assertEqual(str(settings.save_location), os.path.expanduser(DEFAULT_SAVE_FOLDER))
+        self.assertEqual(settings.theme, 'light')
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(Path(f'{self.path}.broken').read_text(), content)
+        settings.theme = 'dark'     # and it works again
+        self.assertEqual(SettingsRepository(self.path).theme, 'dark')
+
+    def test_unknown_kind_sets_the_file_aside(self):
+        self.assert_set_aside('{"save_location": {"type": "ftp"}}')
+
+    def test_broken_file_is_set_aside(self):
+        self.assert_set_aside('{"theme": "da')
+
+    def test_file_of_the_wrong_kind_is_set_aside(self):
+        self.assert_set_aside('["theme"]')
 
     def test_storage_from_dict(self):
         self.assertEqual(storage_from_dict({'type': 'folder', 'path': '/a'}).path, '/a')

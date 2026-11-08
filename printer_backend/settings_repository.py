@@ -8,9 +8,19 @@ class SettingsRepository():
     '''The settings that don't belong to one printer, kept in a json file that is rewritten on every change.'''
     def __init__(self, path: str = SETTINGS_FILE_DEFAULT):
         self.path = path
-        self.settings: dict = read_json(path, {})
-        location = self.settings.get('save_location')
-        self._save_location = LocalFolderStorage(save_root() or DEFAULT_SAVE_FOLDER) if location is None else storage_from_dict(location)
+        # a file that can't be read is set aside by read_json: default settings are better than an app that doesn't start
+        self.settings, self._save_location = read_json(path, ({}, self._default_location()), self._parse)
+
+    @staticmethod
+    def _default_location() -> ScanStorage:
+        return LocalFolderStorage(save_root() or DEFAULT_SAVE_FOLDER)
+
+    @classmethod
+    def _parse(cls, data) -> tuple[dict, ScanStorage]:
+        if not isinstance(data, dict):
+            raise ValueError('the settings are not an object')
+        location = data.get('save_location')
+        return data, cls._default_location() if location is None else storage_from_dict(location)
 
     @property
     def save_location(self) -> ScanStorage:
