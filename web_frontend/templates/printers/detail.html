@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ printer.device|device_name }} · Scanner{% endblock %}
+{% block content %}
+<a class="back" href="/">Back</a>
+<div class="page-title">
+  <h1>{{ printer.device|device_name }}</h1>
+  <small>{{ printer.device }}</small>
+  <div>{% with state = checking %}{% include "printers/_availability.html" %}{% endwith %}</div>
+</div>
+{% include "printers/_panel.html" %}
+<hr class="divider">
+<button class="button button--danger" hx-post="/printers/{{ device_id }}/delete"
+        hx-confirm="Delete '{{ printer.device|device_name }}' and its saved options?">Delete this printer</button>
+{% endblock %}

@@ -1,7 +1,9 @@
+import io
 import json
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -142,6 +144,40 @@ class LocalFolderStorageTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await self.storage.save([self.scan_file()], 'scan')
 
+    async def test_open_file_reads_what_was_saved(self):
+        await self.storage.validate_storage_path()
+        await self.storage.save([self.scan_file(text='scanned')], 'scan')
+        with await self.storage.open_file('scan.pdf') as file:
+            self.assertEqual(file.read(), b'scanned')
+
+    async def test_open_missing_file_is_a_runtime_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Can't read 'gone.pdf'"):
+            await self.storage.open_file('gone.pdf')
+
+    async def test_delete_removes_only_that_file_and_a_second_time_is_fine(self):
+        await self.storage.validate_storage_path()
+        await self.storage.save([self.scan_file(), self.scan_file('b.pdf')], 'scan')
+        await self.storage.delete_file('scan(1).pdf')
+        await self.storage.delete_file('scan(1).pdf')
+        self.assertEqual(os.listdir(self.path), ['scan(2).pdf'])
+
+    async def test_failed_delete_is_a_runtime_error(self):
+        with mock.patch.object(storage_module.os, 'remove', side_effect=PermissionError('locked')), \
+                self.assertRaisesRegex(RuntimeError, 'locked'):
+            await self.storage.delete_file('scan.pdf')
+
+    async def test_zip_has_the_files_and_leaves_them_in_place(self):
+        await self.storage.validate_storage_path()
+        names = await self.storage.save([self.scan_file(text='one'), self.scan_file('b.pdf', 'two')], 'scan')
+        with await self.storage.open_as_zip(names) as archive, zipfile.ZipFile(archive) as zip_file:
+            self.assertEqual({name: zip_file.read(name) for name in zip_file.namelist()},
+                             {'scan(1).pdf': b'one', 'scan(2).pdf': b'two'})
+        self.assertEqual(sorted(os.listdir(self.path)), names)
+
+    async def test_zip_of_a_missing_file_is_a_runtime_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Can't read"):
+            await self.storage.open_as_zip(['gone.pdf'])
+
 
 class FakeCloudStorage(ScanStorage):
     '''What a new kind of location has to implement: nothing but the abstract methods.'''
@@ -157,6 +193,12 @@ class FakeCloudStorage(ScanStorage):
 
     async def copy_file_to_target_location(self, local_path, file_name):
         self.files[file_name] = local_path
+
+    async def open_file(self, file_name):
+        return io.BytesIO(self.files[file_name].encode())
+
+    async def delete_file(self, file_name):
+        self.files.pop(file_name, None)
 
     def to_dict(self):
         return {'type': 'cloud', 'url': self.url}
@@ -181,6 +223,12 @@ class NewKindOfStorageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await storage.save(['b.pdf', 'c.pdf'], 'scan'), ['scan(1).pdf', 'scan(2).pdf'])
         self.assertEqual(storage.files, {'scan.pdf': 'a.pdf', 'scan(1).pdf': 'b.pdf', 'scan(2).pdf': 'c.pdf'})
 
+    async def test_inherits_the_zip(self):
+        storage = FakeCloudStorage('https://cloud')
+        await storage.save(['a.pdf', 'b.pdf'], 'scan')
+        with await storage.open_as_zip(['scan(1).pdf', 'scan(2).pdf']) as archive, zipfile.ZipFile(archive) as zip_file:
+            self.assertEqual(zip_file.read('scan(2).pdf'), b'b.pdf')
+
     def test_round_trips_through_the_settings(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, 'settings.json')
@@ -188,6 +236,58 @@ class NewKindOfStorageTest(unittest.IsolatedAsyncioTestCase):
             location = SettingsRepository(path).save_location
         self.assertIsInstance(location, FakeCloudStorage)
         self.assertEqual(location.url, 'https://cloud')
+
+
+class SaveRootTest(unittest.IsolatedAsyncioTestCase):
+    '''With SAVE_ROOT set (Docker), save locations are folders inside that root.'''
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = os.path.join(folder.name, 'storage')
+        os.makedirs(self.root)
+        self.scans = os.path.join(folder.name, 'scans')
+        patch = mock.patch.dict(os.environ, {'SAVE_ROOT': self.root})
+        patch.start()
+        self.addCleanup(patch.stop)
+        scans = mock.patch.object(storage_module, 'SCAN_FOLDER_DEFAULT', self.scans)
+        scans.start()
+        self.addCleanup(scans.stop)
+
+    def test_relative_location_is_appended_to_the_root(self):
+        self.assertEqual(LocalFolderStorage('Invoices/2026').path, os.path.join(self.root, 'Invoices', '2026'))
+
+    def test_absolute_location_inside_the_root_is_kept(self):
+        self.assertEqual(LocalFolderStorage(os.path.join(self.root, 'a')).path, os.path.join(self.root, 'a'))
+
+    def test_default_location_is_the_root(self):
+        self.assertEqual(str(SettingsRepository(os.path.join(self.root, 'data.json')).save_location), self.root)
+
+    def test_display_path_leaves_out_the_root(self):
+        self.assertEqual(LocalFolderStorage('Invoices/2026').display_path, os.path.join('Invoices', '2026'))
+        self.assertEqual(LocalFolderStorage(os.path.join(self.root, 'a')).display_path, 'a')
+        self.assertEqual(LocalFolderStorage('').display_path, '')
+        self.assertEqual(LocalFolderStorage('/elsewhere').display_path, '/elsewhere')   # a leftover from before the root
+
+    def test_display_path_is_the_whole_path_without_a_root(self):
+        os.environ.pop('SAVE_ROOT')
+        self.assertEqual(LocalFolderStorage('/some/folder').display_path, '/some/folder')
+
+    async def test_locations_outside_the_root_are_refused(self):
+        for path in ('/elsewhere', os.path.join(self.root, '..', 'escape'), '~/Documents', '../escape'):
+            with self.subTest(path), self.assertRaisesRegex(RuntimeError, 'inside'):
+                await LocalFolderStorage(path).validate_storage_path()
+
+    async def test_root_and_folders_inside_it_are_accepted(self):
+        await LocalFolderStorage('').validate_storage_path()
+        await LocalFolderStorage('Invoices').validate_storage_path()
+        self.assertTrue(os.path.isdir(os.path.join(self.root, 'Invoices')))
+
+    async def test_without_a_root_any_folder_is_accepted(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('SAVE_ROOT')
+            folder = os.path.join(os.path.dirname(self.root), 'anywhere')
+            self.assertEqual(LocalFolderStorage(folder).path, folder)
+            await LocalFolderStorage(folder).validate_storage_path()
 
 
 class SettingsRepositoryTest(unittest.TestCase):

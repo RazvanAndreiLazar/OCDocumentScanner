@@ -1,0 +1,434 @@
+/*
+ * The one stylesheet of the web front end. STYLE.md explains how to use it.
+ *
+ * To change the colours, change the four values in "1. Palette": everything else is derived from them.
+ * Colours are written down nowhere else, and tests/test_web_routes.py checks that.
+ */
+
+/* ---------- 1. Palette: one block per colour scheme ---------- */
+:root {
+  --color-primary: #0a7a52;     /* the main action of a page, and "working": the green Start key of a copier */
+  --color-secondary: #2f5d86;   /* the second action, and "busy" */
+  --color-ink: #1b2a36;         /* text; greys are this colour mixed with the paper */
+  --color-alert: #b5341c;       /* errors, "not reachable", deleting */
+  --paper: white;               /* what content lies on, and the text on a filled colour */
+}
+
+:root[data-theme=dark] {
+  --color-primary: #45c595;
+  --color-secondary: #84b4de;
+  --color-ink: #e4eaef;
+  --color-alert: #f2846e;
+  --paper: #1a242d;
+}
+
+/* ---------- 2. Derived colours: use these in the components ---------- */
+:root {
+  color-scheme: light;
+  --on-color: var(--paper);                                             /* text on primary, secondary and alert */
+  --hover: color-mix(in srgb, var(--color-ink) 6%, var(--paper));       /* a row or a quiet button under the pointer */
+  --rule: color-mix(in srgb, var(--color-ink) 16%, var(--paper));       /* lines that only separate */
+  --edge: color-mix(in srgb, var(--color-ink) 52%, var(--paper));       /* the border of a control */
+  --muted: color-mix(in srgb, var(--color-ink) 72%, var(--paper));      /* text that is less important */
+  --primary-pressed: color-mix(in srgb, var(--color-primary) 82%, var(--pressed-toward));
+  --secondary-pressed: color-mix(in srgb, var(--color-secondary) 82%, var(--pressed-toward));
+  --lamp: color-mix(in srgb, var(--color-primary) 70%, white);
+  --on-frame: white;
+
+  /* these go a different way depending on the colour scheme */
+  --glass: color-mix(in srgb, var(--color-ink) 9%, var(--paper));       /* the page behind the paper */
+  --frame: var(--color-ink);                                            /* the body of the scanner */
+  --pressed-toward: black;
+  --shadow: color-mix(in srgb, var(--color-ink) 28%, transparent);
+}
+
+:root[data-theme=dark] {
+  color-scheme: dark;
+  --glass: color-mix(in srgb, var(--paper) 68%, black);
+  --frame: color-mix(in srgb, var(--paper) 45%, black);
+  --pressed-toward: white;
+  --shadow: color-mix(in srgb, black 55%, transparent);
+}
+
+/* ---------- 3. Type, spacing, shape ---------- */
+@font-face {
+  font-family: Archivo;
+  src: url('vendor/archivo/archivo-latin-wght.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --font: Archivo, system-ui, 'Segoe UI', Roboto, sans-serif;
+  --text-small: .8667rem;
+  --text-body: 1rem;
+  --text-heading: 1.2rem;
+  --text-title: 1.6rem;
+
+  --space-1: .25rem;
+  --space-2: .5rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius: 3px;                /* controls; the paper has square corners */
+  --control-height: 2.4rem;
+  --paper-width: 30rem;
+  --lamp-glow: 0 0 .6rem .1rem var(--lamp);
+}
+
+/* desktop: 15px text and compact controls. Touch screens: full size text and targets a finger can hit */
+html { font-size: 93.75%; }
+@media (pointer: coarse) {
+  html { font-size: 100%; }
+  :root { --control-height: 2.75rem; }
+}
+
+/* ---------- 4. Base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--glass);
+  color: var(--color-ink);
+  font-family: var(--font);
+  font-size: var(--text-body);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+h1, h2, p, ul, pre, fieldset { margin: 0; padding: 0; }
+ul { list-style: none; }
+fieldset { border: 0; }
+h1 { font-size: var(--text-title); font-weight: 700; line-height: 1.15; letter-spacing: -.012em; overflow-wrap: break-word; }
+h2 { font-size: var(--text-heading); font-weight: 650; line-height: 1.25; }
+small, .small { font-size: var(--text-small); color: var(--muted); }
+a { color: var(--color-primary); }
+
+:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+/* ---------- 5. Frame: the body of the scanner, with the ruler of its glass ---------- */
+.frame { position: relative; background: var(--frame); color: var(--on-frame); }
+.frame-inner { max-width: var(--paper-width); margin: 0 auto; padding: var(--space-3) var(--space-4); }
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: inherit;
+  font-size: var(--text-heading);
+  font-weight: 700;
+  letter-spacing: -.01em;
+  text-decoration: none;
+}
+.wordmark svg { width: .85em; height: .85em; fill: var(--lamp); }
+.frame :focus-visible { outline-color: var(--on-frame); }
+.theme-toggle {
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-top: calc(-1rem - .25rem);     /* centred on the frame without the ruler */
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.theme-toggle:hover { background: color-mix(in srgb, var(--on-frame) 16%, transparent); }
+.theme-toggle svg { width: 1.05rem; height: 1.05rem; fill: currentColor; }
+@media (pointer: coarse) { .theme-toggle { width: var(--control-height); height: var(--control-height); margin-top: calc(var(--control-height) / -2 - .25rem); } }
+.ruler {
+  height: .5rem;
+  background:
+    repeating-linear-gradient(to right, var(--on-frame) 0 1px, transparent 1px 2.5rem) 0 0 / 100% 100% no-repeat,
+    repeating-linear-gradient(to right, var(--on-frame) 0 1px, transparent 1px .5rem) 0 0 / 100% 30% no-repeat;
+}
+
+/* ---------- 6. Paper: every page is one sheet, slid against the ruler ---------- */
+.paper {
+  position: relative;
+  display: grid;
+  gap: var(--space-6);
+  max-width: var(--paper-width);
+  margin: 0 auto var(--space-8);
+  padding: var(--space-6) var(--space-4) var(--space-8);
+  background: var(--paper);
+  box-shadow: 0 1px 0 var(--edge);
+}
+@media (min-width: 31rem) {
+  .paper { padding-inline: var(--space-8); }
+  .frame-inner { padding-inline: var(--space-8); }
+}
+
+/* on the first page the lamp passes once, as a scanner does when it starts */
+.paper--warm-up::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--lamp);
+  box-shadow: var(--lamp-glow);
+  pointer-events: none;
+  animation: warm-up .9s ease-in-out both;
+}
+@keyframes warm-up {
+  from { top: 0; opacity: 1; }
+  85% { opacity: 1; }
+  to { top: 100%; opacity: 0; }
+}
+
+.stack { display: grid; gap: var(--space-3); }
+.back { justify-self: start; color: var(--muted); font-size: var(--text-small); text-decoration: none; }
+.back:hover { color: var(--color-ink); text-decoration: underline; }
+.back::before { content: '‹ '; }
+.page-title { display: grid; gap: var(--space-1); }
+.divider { width: 100%; height: 1px; margin: 0; border: 0; background: var(--rule); }
+
+/* ---------- 7. Buttons ---------- */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--color-ink);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+.button--primary { background: var(--color-primary); color: var(--on-color); }
+.button--primary:hover { background: var(--primary-pressed); }
+.button--secondary { background: var(--color-secondary); color: var(--on-color); }
+.button--secondary:hover { background: var(--secondary-pressed); }
+.button--quiet { border-color: var(--edge); }
+.button--quiet:hover { background: var(--hover); }
+.button--danger { justify-self: start; color: var(--color-alert); font-weight: 500; padding-inline: 0; min-height: 0; }
+.button--danger:hover { text-decoration: underline; }
+.button--small { font-size: var(--text-small); }
+.button:disabled { background: var(--rule); color: var(--muted); border-color: transparent; cursor: not-allowed; }
+.button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--space-2); }
+
+/* ---------- 8. Fields ---------- */
+.field { display: grid; gap: var(--space-1); align-content: start; min-width: 0; }
+.field-label { font-size: var(--text-small); font-weight: 600; }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-3); }
+
+input:not([type=checkbox], [type=radio]), select {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background-color: var(--paper);
+  color: var(--color-ink);
+  font: inherit;
+}
+input::placeholder { color: var(--muted); }
+select {
+  appearance: none;
+  padding-right: var(--space-8);
+  /* drawn with gradients instead of an image, so that it follows the palette */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(-45deg, transparent 50%, var(--muted) 50%);
+  background-position: right 1rem center, right .65rem center;
+  background-size: .35rem .35rem;
+  background-repeat: no-repeat;
+}
+.check { display: flex; align-items: flex-start; gap: var(--space-2); }
+.check input { flex: none; width: 1rem; height: 1rem; margin: .2rem 0 0; accent-color: var(--color-primary); }
+legend { padding: 0; margin-bottom: var(--space-2); font-size: var(--text-small); font-weight: 600; }
+
+details summary { cursor: pointer; font-size: var(--text-small); font-weight: 600; }
+details[open] summary { margin-bottom: var(--space-3); }
+
+/* what happened to a field that saves itself. The height is kept so that nothing below jumps */
+.field-status { min-height: 1.3em; font-size: var(--text-small); color: var(--muted); }
+.message { color: var(--color-alert); font-size: var(--text-small); font-weight: 500; }
+
+/* ---------- 9. Availability ---------- */
+.status { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-small); font-weight: 450; color: var(--muted); }
+.status::before {
+  content: '';
+  flex: none;
+  width: .55rem;
+  height: .55rem;
+  border-radius: 50%;
+  border: 2px solid var(--edge);
+}
+.status[data-state=available]::before { background: var(--color-primary); border-color: var(--color-primary); }
+.status[data-state=in-use]::before { background: var(--color-secondary); border-color: var(--color-secondary); }
+.status[data-state=not-reachable]::before { background: var(--color-alert); border-color: var(--color-alert); }
+.status[data-state=not-reachable] { color: var(--color-alert); }
+
+/* ---------- 10. Printer picker: closed it shows the active printer, which is always the first row ---------- */
+.picker-slot { position: relative; height: 3.5rem; }
+@media (pointer: coarse) { .picker-slot { height: 3.9rem; } }
+.picker-list {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.picker.is-open .picker-list { box-shadow: 0 .4rem 1.2rem var(--shadow); }
+.picker:not(.is-open) .picker-list li:not(:first-child) { display: none; }
+.picker-list li + li { border-top: 1px solid var(--rule); }
+.picker-option {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  width: 100%;
+  min-height: calc(3.5rem - 2px);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+@media (pointer: coarse) { .picker-option { min-height: calc(3.9rem - 2px); } }
+.picker-option:hover { background: var(--hover); }
+.picker-name { font-weight: 650; }
+.picker-option .status { grid-column: 1; }
+.picker-mark { grid-column: 2; grid-row: 1 / span 2; width: .55rem; height: .55rem; visibility: hidden; }
+/* the arrow of a dropdown, on the row that stands for the closed dropdown. The same one as on a select */
+.picker-option[aria-current=true] .picker-mark {
+  visibility: visible;
+  margin-right: .1rem;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%) left / 50% 100% no-repeat,
+    linear-gradient(-45deg, transparent 50%, var(--muted) 50%) right / 50% 100% no-repeat;
+  width: .7rem;
+  height: .35rem;
+}
+.picker.is-open .picker-option[aria-current=true] .picker-mark { transform: rotate(180deg); }
+.picker-empty { display: flex; align-items: center; height: 100%; padding: 0 var(--space-3); border: 1px dashed var(--edge); border-radius: var(--radius); color: var(--muted); }
+
+/* ---------- 11. Rows that do something when tapped: the printers that were found ---------- */
+.rows { border-block: 1px solid var(--rule); }
+.rows li + li { border-top: 1px solid var(--rule); }
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0 var(--space-4);
+  width: 100%;
+  min-height: 3.5rem;
+  padding: var(--space-2) var(--space-2);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row:hover { background: var(--hover); }
+.row-title { font-weight: 650; }
+.row-detail { grid-column: 1; font-size: var(--text-small); color: var(--muted); }
+.row-action { grid-column: 2; grid-row: 1 / span 2; color: var(--color-primary); font-weight: 650; }
+.row .row-action::after { content: 'Add'; }
+.row.htmx-request .row-action::after { content: 'Adding…'; }
+.row:disabled { cursor: progress; }
+
+/* ---------- 12. Waiting for something ---------- */
+.spinner { display: none; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-small); }
+.spinner::before {
+  content: '';
+  flex: none;
+  width: 1em;
+  height: 1em;
+  border: 2px solid var(--rule);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: turn .8s linear infinite;
+}
+@keyframes turn { to { transform: rotate(360deg); } }
+.discover.htmx-request .spinner { display: flex; }
+.discover.htmx-request #discovered { display: none; }
+
+/* ---------- 13. The scan that is going on: a strip on the other pages, and the page itself ---------- */
+.scan-banner a {
+  display: block;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-secondary);
+  color: var(--on-color);
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-align: center;
+}
+.scan-banner a:focus-visible { outline-color: var(--on-color); outline-offset: -4px; }
+
+.scan-view { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: var(--space-6); align-items: start; }
+@media (max-width: 26rem) { .scan-view { grid-template-columns: minmax(0, 1fr); } .scan-printer { max-width: 9.5rem; } }
+
+/* the glass with the page on it. It sits outside the part that is replaced every second, so that the lamp keeps moving
+   smoothly; app.js copies data-state and --percent from #scan-status to .scan-view */
+.scan-printer { display: grid; gap: var(--space-2); }
+.bed { padding: var(--space-2); background: var(--glass); }
+.sheet {
+  position: relative;
+  aspect-ratio: 1 / 1.414;
+  overflow: hidden;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+.sheet-lines {
+  /* covers the whole sheet, so that what is revealed ends exactly at the lamp */
+  position: absolute;
+  inset: 0;
+  padding: 12% 14%;
+  clip-path: inset(0 0 calc(100% - var(--percent, 0%)) 0);
+  /* a palette colour with opacity: Firefox doesn't paint a repeating gradient from a derived colour to transparent */
+  background: repeating-linear-gradient(to bottom, var(--color-ink) 0 2px, transparent 2px .6rem) content-box;
+  opacity: .42;
+}
+/* only while the lamp moves: in any other state the sheet is simply empty or full at once */
+.scan-view[data-state=running] .sheet-lines { transition: clip-path 1s linear; }
+.sheet-lamp {
+  position: absolute;
+  inset-inline: 0;
+  top: var(--percent, 0%);
+  height: 2px;
+  background: var(--lamp);
+  box-shadow: var(--lamp-glow);
+  transition: top 1s linear;
+}
+.scan-view:not([data-state=running]) .sheet-lamp { display: none; }
+.scan-view[data-percent-known=false] .sheet-lamp { animation: sweep 2.4s ease-in-out infinite alternate; }
+.scan-view[data-state=running][data-percent-known=false] .sheet-lines { clip-path: inset(0 0 100% 0); }
+.scan-view:is([data-state=saving], [data-state=saved], [data-state=save_failed]) .sheet-lines { clip-path: none; }
+.scan-view:is([data-state=waiting], [data-state=cancelled], [data-state=failed]) .sheet-lines { clip-path: inset(0 0 100% 0); }
+.scan-view[data-state=saved] .sheet { box-shadow: 0 0 0 2px var(--color-primary); }
+.scan-view:is([data-state=failed], [data-state=save_failed]) .sheet { box-shadow: 0 0 0 2px var(--color-alert); }
+.scan-view[data-state=waiting] .sheet { background: none; box-shadow: none; outline: 1px dashed var(--edge); outline-offset: -1px; }
+@keyframes sweep { from { top: 0; } to { top: 100%; } }
+
+#scan-status { display: grid; gap: var(--space-3); min-width: 0; }
+.percent { font-variant-numeric: tabular-nums; }
+.saved-files li { font-weight: 600; }
+#scan-status pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; font-size: var(--text-small); }
+
+/* ---------- 14. Motion is only for those who want it ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .paper--warm-up::after { display: none; }
+  .sheet-lines, .sheet-lamp { transition: none; }
+  .scan-view[data-percent-known=false] .sheet-lamp { animation: none; top: 50%; }
+  .spinner::before { animation-duration: 3s; }
+}

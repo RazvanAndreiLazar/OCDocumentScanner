@@ -1,0 +1,29 @@
+# HTTPS on SCANNER_DOMAIN (from .env), a free DuckDNS name that points at 192.168.0.250, the LAN address of
+# this machine, and forwards to the app on 127.0.0.1:8000. The app itself runs as a normal user and can't
+# bind ports 80 and 443, so this proxy does it.
+#
+# HTTPS because browsers only offer their "Save as" window there. The certificate is from Let's Encrypt, so
+# every device trusts it without any setup. Let's Encrypt checks a TXT record that Caddy sets through
+# DuckDNS's API (DNS-01), so nothing here has to be reachable from the internet.
+{
+	acme_dns duckdns {env.DUCKDNS_TOKEN}
+}
+
+{$SCANNER_DOMAIN} {
+	bind 192.168.0.250
+	reverse_proxy 127.0.0.1:8000
+}
+
+# The LAN address and the other names lead to the name the certificate is for. Not a permanent redirect:
+# browsers remember those, even after this changes.
+http://192.168.0.250 http://scanner.lazar http://{$SCANNER_DOMAIN} {
+	bind 192.168.0.250
+	redir https://{$SCANNER_DOMAIN}{uri} 302
+}
+
+# The way in while DuckDNS or the internet is down, when the name doesn't work: the app on plain HTTP, so
+# without the "Save as" window. Not a redirect, and nothing else uses it.
+http://192.168.0.250:8080 http://scanner.local {
+	bind 192.168.0.250
+	reverse_proxy 127.0.0.1:8000
+}

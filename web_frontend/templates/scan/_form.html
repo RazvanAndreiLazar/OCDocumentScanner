@@ -1,0 +1,41 @@
+{# The folder is not part of the form: pressing Enter in it should save it, not start a scan. The form still sends it, see start_scan. #}
+<div class="field">
+  <label class="field-label" for="save-path">Save location</label>
+  <input id="save-path" name="path" value="{{ save_location.display_path }}" autocomplete="off" spellcheck="false"
+         hx-post="/settings/save-location" hx-trigger="change" hx-target="#location-status">
+  <div id="location-status" class="field-status"></div>
+</div>
+
+<form class="stack" hx-post="/scan" hx-target="#form-message" hx-swap="innerHTML" hx-include="#save-path" hx-disabled-elt="find button">
+  <input type="hidden" name="device_id" value="{{ device_id }}">
+
+  <div class="field-row">
+    <label class="field">
+      <span class="field-label">Name</span>
+      <input name="name" placeholder="{{ default_name }}" autocomplete="off">
+    </label>
+
+    <label class="field">
+      <span class="field-label">Format</span>
+      <select name="output_format">
+        {% for format in formats %}<option value="{{ format }}" {{ 'selected' if format == 'pdf' }}>{{ format }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+
+  {% if kind is none %}
+    <fieldset class="stack">
+      <legend>This source isn't a known kind, how should it scan?</legend>
+      <label class="check"><input type="radio" name="how" value="one" required> One page at a time</label>
+      <label class="check"><input type="radio" name="how" value="all" required> Everything in the source</label>
+    </fieldset>
+  {% endif %}
+
+  <label class="check"><input type="checkbox" name="combine" {{ 'checked' if combine_by_default }}> Combine the pages into one document (PDF only)</label>
+  {% if kind == 'document-feeder' %}
+    <label class="check"><input type="checkbox" name="two_sided"> Scan both sides</label>
+  {% endif %}
+
+  <div id="form-message"></div>
+  <button type="submit" class="button button--primary">Start scan</button>
+</form>

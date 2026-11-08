@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Scan · Scanner{% endblock %}
+{% block banner %}{% endblock %}
+{% block content %}
+<a class="back" href="/">Back</a>
+{% if scan_job %}
+  <div class="scan-view">
+    <div class="scan-printer">
+      <div class="bed" aria-hidden="true">
+        <div class="sheet">
+          <div class="sheet-lines"></div>
+          <div class="sheet-lamp"></div>
+        </div>
+      </div>
+      <small>{{ scan_job.device|device_name }}</small>
+    </div>
+    {% include "scan/_status.html" %}
+  </div>
+{% else %}
+  <h1>Scan</h1>
+  <p>There is no scan yet. <a href="/">Choose a printer</a> to start one.</p>
+{% endif %}
+{% endblock %}

@@ -58,6 +58,21 @@ class PrinterRepository():
     def get_all_printers(self) -> list[Printer]:
         return list(self.printers.values())
 
+    async def find_new_printers(self) -> dict[str, str]:
+        '''
+        The devices on the network that aren't saved, as {device: the line scanimage -L printed for it}.
+        Takes a while. Raises RuntimeError if the discovery fails.
+        '''
+        found = {}
+        for line in await Printer.discover_printers():
+            try:
+                device = Printer.printer_name_from_discovery_line(line)
+            except RuntimeError:    # not a device, e.g. 'No scanners were identified'
+                continue
+            if device not in self.printers:
+                found[device] = line.strip()
+        return found
+
     async def get_available_printers(self) -> list[Printer]:
         '''The saved printers that respond right now. Checked together, so a slow device doesn't delay the others.'''
         printers = self.get_all_printers()

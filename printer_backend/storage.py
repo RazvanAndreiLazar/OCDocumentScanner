@@ -3,10 +3,25 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
+from typing import BinaryIO
+import zipfile
 from printer_backend.scanning import SCAN_FOLDER_DEFAULT
 
 DEFAULT_SCAN_NAME = 'scan'
 DEFAULT_SAVE_FOLDER = '~/Documents/Scans'
+SAVE_ROOT_ENV = 'SAVE_ROOT'    # set in Docker: save locations are folders inside this one
+
+
+def save_root() -> str | None:
+    '''The folder every save location has to be in, or None if there is no such limit.'''
+    root = os.environ.get(SAVE_ROOT_ENV, '').strip()
+    return os.path.abspath(root) if root else None
+
+
+def is_within(path: str, folder: str) -> bool:
+    '''True if path is folder itself or inside it, following symbolic links.'''
+    return os.path.commonpath([os.path.realpath(path), os.path.realpath(folder)]) == os.path.realpath(folder)
 
 
 def check_scan_name(name: str):
@@ -49,6 +64,14 @@ class ScanStorage(ABC):
         '''Stores a local file under this name, raising RuntimeError instead of overwriting anything.'''
 
     @abstractmethod
+    async def open_file(self, file_name: str) -> BinaryIO:
+        '''Opens a stored file for reading. The caller closes it.'''
+
+    @abstractmethod
+    async def delete_file(self, file_name: str):
+        '''Deletes a stored file. One that is already gone is not an error.'''
+
+    @abstractmethod
     def to_dict(self) -> dict:
         '''Plain data for the settings file, with its STORAGE_TYPES key as 'type'. No passwords: the file is plain text.'''
 
@@ -61,6 +84,11 @@ class ScanStorage(ABC):
     def __str__(self):
         ...
 
+    @property
+    def display_path(self) -> str:
+        '''What the user sees and types for this location. It is also what comes back in, see LocalFolderStorage.'''
+        return str(self)
+
     async def save(self, files: list[str], name: str) -> list[str]:
         '''Stores the files of one scan under the given name, and returns the file names they got.'''
         file_names = pick_file_names(files, name, await self.existing_names())
@@ -68,18 +96,38 @@ class ScanStorage(ABC):
             await self.copy_file_to_target_location(local_path, file_name)
         return file_names
 
+    async def open_as_zip(self, file_names: list[str]) -> BinaryIO:
+        '''One zip with these stored files, in a temporary file that disappears when the caller closes it.'''
+        archive = tempfile.TemporaryFile()
+        try:
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for file_name in file_names:
+                    with await self.open_file(file_name) as file, zip_file.open(file_name, 'w', force_zip64=True) as entry:
+                        await asyncio.to_thread(shutil.copyfileobj, file, entry)
+        except OSError as error:
+            archive.close()
+            raise RuntimeError(f"Can't pack the files in a zip: {error}") from error
+        except BaseException:
+            archive.close()
+            raise
+        archive.seek(0)
+        return archive
+
 
 class LocalFolderStorage(ScanStorage):
     def __init__(self, path: str):
-        self.path = os.path.abspath(os.path.expanduser(path))
-
-    def _is_inside_scans_folder(self) -> bool:
-        scans = os.path.realpath(SCAN_FOLDER_DEFAULT)
-        return os.path.commonpath([os.path.realpath(self.path), scans]) == scans
+        path = os.path.expanduser(path)
+        root = save_root()
+        if root is not None and not os.path.isabs(path):
+            path = os.path.join(root, path)     # a relative location is appended to the save root
+        self.path = os.path.abspath(path)
 
     async def validate_storage_path(self):
+        root = save_root()
+        if root is not None and not is_within(self.path, root):
+            raise RuntimeError(f"Can't save in '{self.path}': save locations have to be inside '{root}'")
         # every scan empties that folder, which would delete what was saved in there
-        if self._is_inside_scans_folder():
+        if is_within(self.path, SCAN_FOLDER_DEFAULT):
             raise RuntimeError(f"Can't save in '{self.path}': it is inside the temporary folder '{SCAN_FOLDER_DEFAULT}'")
         
         try:
@@ -107,6 +155,29 @@ class LocalFolderStorage(ScanStorage):
                     raise
         except OSError as error:
             raise RuntimeError(f"Can't save '{file_name}' in '{self.path}': {error}") from error
+
+    async def open_file(self, file_name: str) -> BinaryIO:
+        try:
+            return open(os.path.join(self.path, file_name), 'rb')
+        except OSError as error:
+            raise RuntimeError(f"Can't read '{file_name}' in '{self.path}': {error}") from error
+
+    async def delete_file(self, file_name: str):
+        try:
+            os.remove(os.path.join(self.path, file_name))
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise RuntimeError(f"Can't delete '{file_name}' in '{self.path}': {error}") from error
+
+    @property
+    def display_path(self) -> str:
+        '''The path without the save root, which is added again to whatever the user enters ('' for the root itself).'''
+        root = save_root()
+        if root is None or not is_within(self.path, root):
+            return self.path
+        relative = os.path.relpath(os.path.realpath(self.path), os.path.realpath(root))
+        return '' if relative == '.' else relative
 
     def to_dict(self) -> dict:
         return {'type': 'folder', 'path': self.path}
