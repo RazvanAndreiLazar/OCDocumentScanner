@@ -1,7 +1,0 @@
-# Port 80 on 192.168.0.250 only (the LAN address of this machine) -> the app on 127.0.0.1:8000.
-# The app itself runs as a normal user and can't bind port 80, so this proxy does it.
-# Plain HTTP: add a site name here for HTTPS.
-http://192.168.0.250:80 http://scanner:80 http://scanner.local:80 {
-	bind 192.168.0.250
-	reverse_proxy 127.0.0.1:8000
-}

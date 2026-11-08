@@ -47,29 +47,42 @@ Then `sudo systemctl enable --now scanner-web`. The user needs to write to `data
 
 On a Linux host with `avahi-daemon` running:
 
+1. Sign in at [duckdns.org](https://www.duckdns.org), add a name (it's free) and set its IP to the LAN address of this machine, `192.168.0.250`.
+2. Then:
+
 ```
-echo "DATA_LOCATION=/srv/data/printer_app" > .env     # where it keeps its data, see below
-./docker-init.sh                                       # once: creates the folders and gives them to the app's user
+cp .env.example .env        # and fill it in: DATA_LOCATION, SCANNER_DOMAIN and DUCKDNS_TOKEN, see below
+./docker-init.sh            # once: creates the folders and gives them to the app's user
 docker compose up -d --build
 ```
 
-`docker-init.sh` creates `data/`, `temp_scans/` and `scans/` in `DATA_LOCATION` and makes `APP_UID:APP_GID` their owner, using `sudo` for what your user isn't allowed to do. Docker would create missing folders itself, but owned by root, and the app doesn't run as root. It reads the same `.env` as Compose, is safe to run again, and fixes the owner of folders that already exist (say, ones Docker created).
+`docker-init.sh` creates `data/` and `scans/` in `DATA_LOCATION` and makes `APP_UID:APP_GID` their owner, using `sudo` for what your user isn't allowed to do. Docker would create missing folders itself, but owned by root, and the app doesn't run as root. It reads the same `.env` as Compose, is safe to run again, and fixes the owner of folders that already exist (say, ones Docker created).
 
-Open `http://192.168.0.250/` (port 80). The Caddy proxy (`Caddyfile`) listens on that one address only and forwards to the app, which listens on `127.0.0.1:8000`. To use another address, change it in `Caddyfile`. It starts again after a reboot. `docker compose logs -f` shows the log and `docker compose down` stops it. The image has `scanimage`, `sane-airscan` and `img2pdf`, so the host only needs Docker and Avahi.
+Open `https://<SCANNER_DOMAIN>/`, here `https://scanner-lazar.duckdns.org/`. `http://192.168.0.250/` leads there too. The Caddy proxy (`proxy/Caddyfile`) listens on that one address only, on ports 443 and 80, and forwards to the app, which listens on `127.0.0.1:8000`. To use another address, change it in `proxy/Caddyfile` and at DuckDNS. It starts again after a reboot. `docker compose logs -f` shows the log and `docker compose down` stops it. The image has `scanimage`, `sane-airscan` and `img2pdf`, so the host only needs Docker and Avahi.
 
-Settings go in a `.env` file next to `docker-compose.yaml`. All of them are optional:
+Settings go in a `.env` file next to `docker-compose.yaml`. All but the first three are optional:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `WEB_HOST` | `127.0.0.1` | Address the app listens on. Only the proxy on this machine needs to reach it |
-| `WEB_PORT` | `8000` | Port the app listens on. If you change it, change `Caddyfile` to match |
+| `WEB_PORT` | `8000` | Port the app listens on. If you change it, change `proxy/Caddyfile` to match |
 | `WEB_ALLOWED_HOSTS` | `*` | As in the table above |
-| `DATA_LOCATION` | none, required | The host folder that holds `data/` (saved printers and settings, and the temporary scan folder), `temp_scans/` and `scans/` (the finished scans) |
-| `APP_UID`, `APP_GID` | `1000` | The user that runs the app. It has to be able to write to the three folders in `DATA_LOCATION`: `id -u` and `id -g` show yours |
+| `DATA_LOCATION` | none, required | The host folder that holds `data/` (saved printers and settings, and the temporary scan folder) and `scans/` (the finished scans) |
+| `SCANNER_DOMAIN` | none, required | The DuckDNS name, e.g. `scanner-lazar.duckdns.org`. Its IP has to be the LAN address of this machine |
+| `DUCKDNS_TOKEN` | none, required | The token at the top of duckdns.org. It can change every name of that DuckDNS account, so keep `.env` private |
+| `APP_UID`, `APP_GID` | `1000` | The user that runs the app. It has to be able to write to the two folders in `DATA_LOCATION`: `id -u` and `id -g` show yours |
 
 **The save location is always inside `/app/storage`**, which is `$DATA_LOCATION/scans` on the host. The field on the scan page leaves that part out: what you enter is added to it, so `Invoices/2026` saves in `$DATA_LOCATION/scans/Invoices/2026`, and an empty field saves in the folder itself. Anything that leads outside it (an absolute path, `~`, `..`) is refused, because the rest of the container is read-only and files saved there would be lost with it. This is the `SAVE_ROOT` setting in `docker-compose.yaml`; without it (outside Docker) the field holds the whole path, as before.
 
-Both containers use the host's network (`network_mode: host`) because finding scanners relies on multicast, which doesn't reach Docker's own networks. That is also why there is no `ports:` section: the proxy listens on port 80 directly. To make the app reachable from other machines itself, set `WEB_HOST=0.0.0.0` and point the proxy at it, or limit port 80 with a firewall. The image has the same scanner support as a Debian 13 host with `sane-utils`, `sane-airscan` and `hplip`: SANE's standard backends, `airscan` and HP's `hpaio`. It finds network scanners through the host's Avahi daemon, so the folders `/run/avahi-daemon` and `/run/dbus` are mounted read-only. Scanners that need a vendor's own driver or plugin need extra steps, see below. For a USB scanner, see the lines at the end of `docker-compose.yaml`.
+Both containers use the host's network (`network_mode: host`) because finding scanners relies on multicast, which doesn't reach Docker's own networks. That is also why there is no `ports:` section: the proxy listens on ports 80 and 443 directly. To make the app reachable from other machines itself, set `WEB_HOST=0.0.0.0` and point the proxy at it, or limit those ports with a firewall. The image has the same scanner support as a Debian 13 host with `sane-utils`, `sane-airscan` and `hplip`: SANE's standard backends, `airscan` and HP's `hpaio`. It finds network scanners through the host's Avahi daemon, so the folders `/run/avahi-daemon` and `/run/dbus` are mounted read-only. Scanners that need a vendor's own driver or plugin need extra steps, see below. For a USB scanner, see the lines at the end of `docker-compose.yaml`.
+
+#### HTTPS
+
+The app runs on HTTPS because browsers only offer their "Save as" window there (see Downloading below). The certificate is from Let's Encrypt, so every device trusts it without any setup. A LAN address can't get one, which is why the name: a free DuckDNS name that points at the LAN address. `proxy/Dockerfile` builds Caddy with the DuckDNS module, and Caddy proves to Let's Encrypt that the name is yours by setting a TXT record through DuckDNS's API (the DNS-01 challenge). Nothing has to be reachable from the internet, and it renews by itself.
+
+- **It needs the internet:** devices ask DuckDNS's servers where the name points, so while the internet or DuckDNS is down the name doesn't work, and `http://192.168.0.250/` only leads to it. **Then use `http://192.168.0.250:8080/`**: the same app on plain HTTP, with downloads going wherever the browser puts them. Renewing the certificate also needs DuckDNS. It is valid for about 90 days and renewed well before that, so a short outage doesn't matter.
+- **Keep the `proxy_data` volume:** it holds the certificate. Without it Caddy gets a new one at every start, and Let's Encrypt allows only 5 certificates for the same name per week.
+- **The name is public:** it shows up in DNS, pointing at `192.168.0.250`, and in the public logs of certificates. That address only works inside your LAN.
 
 #### Scanners that need a vendor driver or plugin
 

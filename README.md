@@ -5,4 +5,4 @@ Web interface for server-side document scanning and saving to Open Cloud
 - `web_frontend/`: the browser UI ([docs](web_frontend/README.md))
 - `main_cli.py`: the same features in a terminal
 
-To run the web UI with Docker: set `DATA_LOCATION` in a `.env` file, then `./docker-init.sh && docker compose up -d --build` and open http://192.168.0.250/ ([details](web_frontend/README.md#with-docker)).
+To run the web UI with Docker: set `DATA_LOCATION`, `SCANNER_DOMAIN` and `DUCKDNS_TOKEN` in a `.env` file, then `./docker-init.sh && docker compose up -d --build` and open https://scanner-lazar.duckdns.org/ ([details](web_frontend/README.md#with-docker)).
