@@ -9,6 +9,11 @@
 	acme_dns duckdns {env.DUCKDNS_TOKEN}
 	# Config changes need `docker compose restart proxy`.
 	admin off
+	# No HTTP/3 (QUIC, over UDP): downloads over it broke off with "Network blackhole detected" from
+	# Chrome, while TCP (HTTP/1.1 and 2) works. On the LAN it gains nothing.
+	servers {
+		protocols h1 h2
+	}
 }
 
 # Stops other sites from putting the scanner in a hidden frame (clickjacking). To embed it in another app

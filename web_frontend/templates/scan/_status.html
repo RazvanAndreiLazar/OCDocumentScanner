@@ -42,7 +42,7 @@
       {# static/app.js does the work: it has to know that the file arrived before deleting it from the server #}
       <div id="scan-download" class="stack" data-url="/scan/{{ job.id }}/download" data-delete-url="/scan/{{ job.id }}/delete" data-name="{{ job.download_name }}">
         <div><button type="button" class="button button--secondary" data-download="keep">Download to this device</button></div>
-        <div><button type="button" class="button button--danger button--small" data-download="delete">Download and delete from the server</button></div>
+        <div><button type="button" class="button button--danger" data-download="delete">Download and delete from the server</button></div>
         <div id="scan-download-message" class="small" role="status" hidden></div>
       </div>
     {% else %}
