@@ -176,7 +176,7 @@ Nothing is ever overwritten. A taken name gets the next number after the highest
 If saving fails, the front ends leave the files in `./data/scans`, where they stay until the next scan. The web UI offers to try saving again.
 
 To add a kind of location, such as OpenCloud:
-1. Subclass `ScanStorage` and implement `validate_storage_path`, `existing_names`, `copy_file_to_target_location`, `to_dict`, `from_dict` and `__str__`. The naming in `save` is inherited.
+1. Subclass `ScanStorage` and implement `validate_storage_path`, `existing_names`, `copy_file_to_target_location`, `open_file`, `delete_file`, `to_dict`, `from_dict` and `__str__`. The naming in `save` is inherited.
 2. Raise `RuntimeError` for failures, and refuse to overwrite in `copy_file_to_target_location`.
 3. Add it to `STORAGE_TYPES`, using the same key as `'type'` in `to_dict`.
 4. Let the user choose it in `change_save_location` in `main_cli.py` and in `web_frontend/routes/settings.py`, which only ask for a folder today.

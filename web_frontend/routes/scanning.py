@@ -1,4 +1,10 @@
+from collections.abc import Iterator
+import mimetypes
+from typing import BinaryIO
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Form, Request, Response
+from fastapi.responses import StreamingResponse
 
 from printer_backend.printer import Printer
 from printer_backend.printer_repository import PrinterRepository
@@ -12,6 +18,7 @@ from web_frontend.scan_job import ScanJob
 
 router = APIRouter()
 RUNNING_SCAN = {'HX-Redirect': '/scan'}
+DOWNLOAD_CHUNK = 1024 * 1024
 
 
 def render(request: Request, template: str, **context):
@@ -96,4 +103,35 @@ async def scan_cancel(request: Request):
 @router.post('/scan/save')
 async def scan_retry_save(request: Request):
     current_job(request).retry_save()
+    return render(request, 'scan/_status.html')
+
+
+def job_of_page(request: Request, job_id: str) -> ScanJob:
+    '''The job a page was showing. A page left open must not get or delete the files of a newer scan.'''
+    job = current_job(request)
+    if job.id != job_id:
+        raise ValueError("This isn't the latest scan anymore. Its files stay in the save location")
+    return job
+
+
+def read_chunks(file: BinaryIO) -> Iterator[bytes]:
+    with file:
+        while chunk := file.read(DOWNLOAD_CHUNK):
+            yield chunk
+
+
+@router.get('/scan/{job_id}/download')
+async def scan_download(request: Request, job_id: str):
+    job = job_of_page(request, job_id)
+    name = job.download_name
+    file = await job.open_download()
+    return StreamingResponse(read_chunks(file),
+                             media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                             headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(name)}",
+                                      'Cache-Control': 'no-store'})
+
+
+@router.post('/scan/{job_id}/delete')
+async def scan_delete(request: Request, job_id: str):
+    await job_of_page(request, job_id).delete_saved()
     return render(request, 'scan/_status.html')

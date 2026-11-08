@@ -101,7 +101,9 @@ There is **no login**: it is meant for a trusted network or VPN. Anyone who can 
 | `/` | The dropdown of saved printers with their availability, showing the active one (the last one chosen, remembered on the server). A button to scan with it and one to search for a new printer |
 | `/printers/discover` | Searches the network when it opens and lists the new printers. Tapping one adds it and makes it the active one |
 | `/printers/{id}` | Switch the source, change the options and the save location (each saved as you go), start a scan, and delete the printer |
-| `/scan` | The scan that is running, or the last one: progress, the questions of the scan ("place the next page", "turn the stack around"), cancel, and a retry if saving failed |
+| `/scan` | The scan that is running, or the last one: progress, the questions of the scan ("place the next page", "turn the stack around"), cancel, a retry if saving failed, and downloading the saved files |
+
+**Downloading** gives one file, or one zip if the scan made several. Where the browser has a "Save as" window (`showSaveFilePicker`: Chromium browsers, and only on HTTPS or `localhost`) it asks where to save. Elsewhere, such as in Firefox and Safari, the browser treats it as any other download, which still saves the file on that device: where depends on the browser's settings, and most can ask each time. "Download and delete from the server" deletes after the "Save as" window's file is written; without that window it can't see whether the file arrived, so it asks first. A download only works from the page of the latest scan, so a page left open can't take or delete the files of a newer one.
 
 A scan runs on the server, so the page can be closed, or opened on another device, and it continues. A strip on the other pages shows that a scan is going on, or needs an answer. It asks the server every 3 seconds, so it disappears when the scan ends and appears when one starts on another device, without a reload. Only one scan runs at a time, because every scan uses and empties `./data/scans`. While it runs the devices are left alone: looking for printers and adding one are refused, and availability shows "In use".
 
@@ -140,7 +142,7 @@ web_frontend/
 - **A page:** a router in `routes/`, included in `create_app`, and templates under `templates/<name>/`. Use the components in [STYLE.md](STYLE.md).
 - **A new kind of save location (OpenCloud):** a `ScanStorage` subclass in the backend (see `printer_backend/README.md`), then let the save location field on the printer page (`templates/scan/_form.html`) choose it.
 - **A step after the scan (OCR):** in `ScanJob._scan_and_save`, between the scan and `_save`.
-- **Downloading or listing finished scans:** a new router that reads from the save location.
+- **Listing finished scans:** a new router that reads from the save location.
 - **A JSON API:** a router that returns the same data the pages use; no change to the rest.
 
 ## Tests
@@ -153,6 +155,6 @@ web_frontend/
 
 ## Not done
 
-- Downloading the finished files from the browser, thumbnails of the pages, a history of scans, OCR, and OpenCloud storage.
+- Thumbnails of the pages, a history of scans, OCR, and OpenCloud storage.
 - The pages were tried in Firefox only, including a touch screen emulation at 360px wide, and through the tests. The scans were run against a stand-in `scanimage`; the real printer is what the backend README's "What has been tested on real hardware" is about.
 - Two people changing the same printer at once: the last change wins.

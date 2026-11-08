@@ -126,3 +126,72 @@ document.addEventListener('toggle', (event) => {
 }, true);
 document.addEventListener('htmx:afterSettle', syncScanView);
 document.addEventListener('DOMContentLoaded', syncScanView);
+
+
+// ----- Downloading a finished scan (scan/_status.html) -----
+function showDownloadMessage(text, isError = false) {
+  const message = document.getElementById('scan-download-message');
+  message.textContent = text;
+  message.hidden = !text;
+  message.classList.toggle('message', isError);
+}
+
+// The text of a refused request, which is the fragment of show_error in app.py
+async function refusal(response) {
+  const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+  return new Error(page.body.textContent.trim() || `The server answered ${response.status}`);
+}
+
+// Returns true if the file is known to be written. That takes the browser's "Save as" window, which
+// only some browsers have and only on HTTPS or localhost. Without it the browser gets the file and
+// handles it as it does any download, and whether that worked can't be seen from here.
+async function saveOnDevice(url, name) {
+  // first: the browser only opens this window straight after a click
+  const target = window.showSaveFilePicker ? await window.showSaveFilePicker({suggestedName: name}) : null;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw await refusal(response);
+  }
+  if (target) {
+    await response.body.pipeTo(await target.createWritable());
+    return true;
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+  return false;
+}
+
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-download]');
+  if (!button) {
+    return;
+  }
+  const box = document.getElementById('scan-download');
+  const buttons = box.querySelectorAll('button');
+  buttons.forEach((each) => { each.disabled = true; });
+  showDownloadMessage('Downloading…');
+  try {
+    const written = await saveOnDevice(box.dataset.url, box.dataset.name);
+    if (button.dataset.download === 'delete') {
+      if (!written && !confirm('Check that the scan is on this device. Delete it from the server?')) {
+        showDownloadMessage('The scan stays on the server.');
+        return;
+      }
+      const response = await fetch(box.dataset.deleteUrl, {method: 'POST'});
+      if (!response.ok) {
+        throw await refusal(response);
+      }
+      htmx.ajax('GET', '/scan/status', {target: '#scan-status', swap: 'outerHTML'});
+    } else {
+      showDownloadMessage(written ? 'Saved on this device.' : 'Sent to the downloads of your browser.');
+    }
+  } catch (error) {
+    // AbortError: the "Save as" window was closed without choosing a place
+    showDownloadMessage(error.name === 'AbortError' ? '' : error.message, true);
+  } finally {
+    buttons.forEach((each) => { each.disabled = false; });
+  }
+});

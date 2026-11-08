@@ -1,7 +1,9 @@
+import io
 import json
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -142,6 +144,40 @@ class LocalFolderStorageTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await self.storage.save([self.scan_file()], 'scan')
 
+    async def test_open_file_reads_what_was_saved(self):
+        await self.storage.validate_storage_path()
+        await self.storage.save([self.scan_file(text='scanned')], 'scan')
+        with await self.storage.open_file('scan.pdf') as file:
+            self.assertEqual(file.read(), b'scanned')
+
+    async def test_open_missing_file_is_a_runtime_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Can't read 'gone.pdf'"):
+            await self.storage.open_file('gone.pdf')
+
+    async def test_delete_removes_only_that_file_and_a_second_time_is_fine(self):
+        await self.storage.validate_storage_path()
+        await self.storage.save([self.scan_file(), self.scan_file('b.pdf')], 'scan')
+        await self.storage.delete_file('scan(1).pdf')
+        await self.storage.delete_file('scan(1).pdf')
+        self.assertEqual(os.listdir(self.path), ['scan(2).pdf'])
+
+    async def test_failed_delete_is_a_runtime_error(self):
+        with mock.patch.object(storage_module.os, 'remove', side_effect=PermissionError('locked')), \
+                self.assertRaisesRegex(RuntimeError, 'locked'):
+            await self.storage.delete_file('scan.pdf')
+
+    async def test_zip_has_the_files_and_leaves_them_in_place(self):
+        await self.storage.validate_storage_path()
+        names = await self.storage.save([self.scan_file(text='one'), self.scan_file('b.pdf', 'two')], 'scan')
+        with await self.storage.open_as_zip(names) as archive, zipfile.ZipFile(archive) as zip_file:
+            self.assertEqual({name: zip_file.read(name) for name in zip_file.namelist()},
+                             {'scan(1).pdf': b'one', 'scan(2).pdf': b'two'})
+        self.assertEqual(sorted(os.listdir(self.path)), names)
+
+    async def test_zip_of_a_missing_file_is_a_runtime_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Can't read"):
+            await self.storage.open_as_zip(['gone.pdf'])
+
 
 class FakeCloudStorage(ScanStorage):
     '''What a new kind of location has to implement: nothing but the abstract methods.'''
@@ -157,6 +193,12 @@ class FakeCloudStorage(ScanStorage):
 
     async def copy_file_to_target_location(self, local_path, file_name):
         self.files[file_name] = local_path
+
+    async def open_file(self, file_name):
+        return io.BytesIO(self.files[file_name].encode())
+
+    async def delete_file(self, file_name):
+        self.files.pop(file_name, None)
 
     def to_dict(self):
         return {'type': 'cloud', 'url': self.url}
@@ -180,6 +222,12 @@ class NewKindOfStorageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await storage.save(['a.pdf'], 'scan'), ['scan.pdf'])
         self.assertEqual(await storage.save(['b.pdf', 'c.pdf'], 'scan'), ['scan(1).pdf', 'scan(2).pdf'])
         self.assertEqual(storage.files, {'scan.pdf': 'a.pdf', 'scan(1).pdf': 'b.pdf', 'scan(2).pdf': 'c.pdf'})
+
+    async def test_inherits_the_zip(self):
+        storage = FakeCloudStorage('https://cloud')
+        await storage.save(['a.pdf', 'b.pdf'], 'scan')
+        with await storage.open_as_zip(['scan(1).pdf', 'scan(2).pdf']) as archive, zipfile.ZipFile(archive) as zip_file:
+            self.assertEqual(zip_file.read('scan(2).pdf'), b'b.pdf')
 
     def test_round_trips_through_the_settings(self):
         with tempfile.TemporaryDirectory() as folder:

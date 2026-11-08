@@ -76,6 +76,7 @@ Text is in sentence case. A button says what it does ("Start scan"), and an erro
 | `.button` + `--secondary` | The second action |
 | `.button` + `--quiet` | An action that matters less, such as Cancel |
 | `.button` + `--danger` | Red text only, for deleting |
+| `.button` + `--small` | Small text, for an action below the one it goes with |
 | `.field`, `.field-label`, `.field-row` | A labelled input or select, and fields side by side |
 | `.field-status` | The result of a field that saves itself. Its height is reserved so that nothing jumps under the pointer |
 | `.check` | A checkbox or radio with its text |

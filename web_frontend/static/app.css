@@ -217,6 +217,7 @@ a { color: var(--color-primary); }
 .button--quiet:hover { background: var(--hover); }
 .button--danger { justify-self: start; color: var(--color-alert); font-weight: 500; padding-inline: 0; min-height: 0; }
 .button--danger:hover { text-decoration: underline; }
+.button--small { font-size: var(--text-small); }
 .button:disabled { background: var(--rule); color: var(--muted); border-color: transparent; cursor: not-allowed; }
 .button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--space-2); }
 

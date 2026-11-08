@@ -1,9 +1,11 @@
 import html
+import io
 import os
 import re
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -332,6 +334,114 @@ class WebScanTest(WebTestCase):
     def test_status_without_a_scan(self):
         self.assertIn('There is no scan', self.client.get('/scan/status').text)
         self.assertEqual(self.client.post('/scan/cancel').status_code, 422)
+
+    def finish_scan(self, *documents, name='invoice'):
+        '''Runs a scan to the Saved page and returns the job and that page.'''
+        self.script = [Done([str(document) for document in documents])]
+        self.start(name=name, output_format='pdf')
+        page = self.wait_for('Saved')
+        return self.client.app.state.scans.job, page
+
+    def second_document(self):
+        document = self.folder / 'b.pdf'
+        document.write_bytes(b'%PDF two')
+        return document
+
+    def test_saved_page_has_the_download_buttons_above_the_way_back(self):
+        job, page = self.finish_scan(self.document)
+        self.assertIn(f'data-url="/scan/{job.id}/download"', page)
+        self.assertIn(f'data-delete-url="/scan/{job.id}/delete"', page)
+        self.assertIn('data-name="invoice.pdf"', page)
+        self.assertLess(page.index('Download to this device'), page.index('Download and delete from the server'))
+        self.assertLess(page.index('Download and delete from the server'), page.index('Back to printers'))
+
+    def test_download_of_one_file(self):
+        job, _ = self.finish_scan(self.document)
+        response = self.client.get(f'/scan/{job.id}/download')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'%PDF')
+        self.assertEqual(response.headers['content-type'], 'application/pdf')
+        self.assertEqual(response.headers['content-disposition'], "attachment; filename*=UTF-8''invoice.pdf")
+        self.assertTrue((self.folder / 'saved' / 'invoice.pdf').exists())   # a download alone keeps the file
+
+    def test_download_name_cant_break_out_of_the_header(self):
+        job, _ = self.finish_scan(self.document, name='factură "a"; b')
+        disposition = self.client.get(f'/scan/{job.id}/download').headers['content-disposition']
+        self.assertEqual(disposition, "attachment; filename*=UTF-8''factur%C4%83%20%22a%22%3B%20b.pdf")
+
+    def test_download_of_several_files_is_one_zip(self):
+        job, page = self.finish_scan(self.document, self.second_document())
+        self.assertIn('data-name="invoice.zip"', page)
+        response = self.client.get(f'/scan/{job.id}/download')
+        self.assertEqual(response.headers['content-type'], 'application/zip')
+        self.assertIn("filename*=UTF-8''invoice.zip", response.headers['content-disposition'])
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
+            self.assertEqual({name: zip_file.read(name) for name in zip_file.namelist()},
+                             {'invoice(1).pdf': b'%PDF', 'invoice(2).pdf': b'%PDF two'})
+
+    def test_download_of_a_file_that_is_gone_says_so(self):
+        job, _ = self.finish_scan(self.document)
+        (self.folder / 'saved' / 'invoice.pdf').unlink()
+        response = self.client.get(f'/scan/{job.id}/download')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('invoice.pdf', html.unescape(response.text))
+
+    def test_delete_removes_all_the_files_and_the_page_says_so(self):
+        job, _ = self.finish_scan(self.document, self.second_document())
+        response = self.client.post(f'/scan/{job.id}/delete')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list((self.folder / 'saved').iterdir()), [])
+        for page in (response.text, self.client.get('/scan/status').text):
+            self.assertIn('deleted from the server', page)
+            self.assertNotIn('data-download', page)
+            self.assertIn('Back to printers', page)
+
+    def test_after_deleting_there_is_nothing_to_download_and_deleting_again_is_fine(self):
+        job, _ = self.finish_scan(self.document)
+        self.client.post(f'/scan/{job.id}/delete')
+        self.assertEqual(self.client.get(f'/scan/{job.id}/download').status_code, 422)
+        self.assertEqual(self.client.post(f'/scan/{job.id}/delete').status_code, 200)
+
+    def test_failed_delete_keeps_what_is_left_listed(self):
+        job, _ = self.finish_scan(self.document, self.second_document())
+        real_remove = os.remove
+
+        def remove(path):
+            if path.endswith('invoice(2).pdf'):
+                raise PermissionError('locked')
+            real_remove(path)
+        with mock.patch('printer_backend.storage.os.remove', remove):
+            response = self.client.post(f'/scan/{job.id}/delete')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('locked', response.text)
+        page = self.client.get('/scan/status').text
+        self.assertIn('invoice(2).pdf', page)
+        self.assertNotIn('invoice(1).pdf', page)
+        self.assertEqual(self.client.get(f'/scan/{job.id}/download').content, b'%PDF two')
+
+    def test_page_of_an_older_scan_cant_touch_the_newer_one(self):
+        old, _ = self.finish_scan(self.document)
+        new, _ = self.finish_scan(self.document, name='newer')
+        self.assertNotEqual(old.id, new.id)
+        self.assertEqual(self.client.get(f'/scan/{old.id}/download').status_code, 422)
+        self.assertEqual(self.client.post(f'/scan/{old.id}/delete').status_code, 422)
+        self.assertTrue((self.folder / 'saved' / 'newer.pdf').exists())
+        self.assertTrue((self.folder / 'saved' / 'invoice.pdf').exists())
+
+    def test_nothing_to_download_or_delete_before_the_scan_is_saved(self):
+        self.script = [NeedsInput(NEXT_PAGE)]
+        self.start()
+        page = self.wait_for('Place the next page')
+        job = self.client.app.state.scans.job
+        self.assertNotIn('data-download', page)
+        self.assertEqual(self.client.get(f'/scan/{job.id}/download').status_code, 422)
+        self.assertEqual(self.client.post(f'/scan/{job.id}/delete').status_code, 422)
+
+    def test_cross_site_delete_is_refused(self):
+        job, _ = self.finish_scan(self.document)
+        response = self.client.post(f'/scan/{job.id}/delete', headers={'Sec-Fetch-Site': 'cross-site'})
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue((self.folder / 'saved' / 'invoice.pdf').exists())
 
 
 @unittest.skipIf(TestClient is None, 'fastapi is not installed')

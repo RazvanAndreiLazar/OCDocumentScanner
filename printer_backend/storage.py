@@ -3,6 +3,9 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
+from typing import BinaryIO
+import zipfile
 from printer_backend.scanning import SCAN_FOLDER_DEFAULT
 
 DEFAULT_SCAN_NAME = 'scan'
@@ -61,6 +64,14 @@ class ScanStorage(ABC):
         '''Stores a local file under this name, raising RuntimeError instead of overwriting anything.'''
 
     @abstractmethod
+    async def open_file(self, file_name: str) -> BinaryIO:
+        '''Opens a stored file for reading. The caller closes it.'''
+
+    @abstractmethod
+    async def delete_file(self, file_name: str):
+        '''Deletes a stored file. One that is already gone is not an error.'''
+
+    @abstractmethod
     def to_dict(self) -> dict:
         '''Plain data for the settings file, with its STORAGE_TYPES key as 'type'. No passwords: the file is plain text.'''
 
@@ -84,6 +95,23 @@ class ScanStorage(ABC):
         for local_path, file_name in zip(files, file_names):
             await self.copy_file_to_target_location(local_path, file_name)
         return file_names
+
+    async def open_as_zip(self, file_names: list[str]) -> BinaryIO:
+        '''One zip with these stored files, in a temporary file that disappears when the caller closes it.'''
+        archive = tempfile.TemporaryFile()
+        try:
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for file_name in file_names:
+                    with await self.open_file(file_name) as file, zip_file.open(file_name, 'w', force_zip64=True) as entry:
+                        await asyncio.to_thread(shutil.copyfileobj, file, entry)
+        except OSError as error:
+            archive.close()
+            raise RuntimeError(f"Can't pack the files in a zip: {error}") from error
+        except BaseException:
+            archive.close()
+            raise
+        archive.seek(0)
+        return archive
 
 
 class LocalFolderStorage(ScanStorage):
@@ -127,6 +155,20 @@ class LocalFolderStorage(ScanStorage):
                     raise
         except OSError as error:
             raise RuntimeError(f"Can't save '{file_name}' in '{self.path}': {error}") from error
+
+    async def open_file(self, file_name: str) -> BinaryIO:
+        try:
+            return open(os.path.join(self.path, file_name), 'rb')
+        except OSError as error:
+            raise RuntimeError(f"Can't read '{file_name}' in '{self.path}': {error}") from error
+
+    async def delete_file(self, file_name: str):
+        try:
+            os.remove(os.path.join(self.path, file_name))
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise RuntimeError(f"Can't delete '{file_name}' in '{self.path}': {error}") from error
 
     @property
     def display_path(self) -> str:

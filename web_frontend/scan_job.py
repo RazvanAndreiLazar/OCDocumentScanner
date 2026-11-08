@@ -4,6 +4,8 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 import logging
 import re
+from typing import BinaryIO
+from uuid import uuid4
 
 from printer_backend.printer import Printer
 from printer_backend.scanning import Done, NeedsInput, PageScanned, Progress
@@ -30,6 +32,7 @@ class ScanJob():
     and retry_save().
     '''
     def __init__(self, scan: AsyncGenerator, name: str, storage: ScanStorage, device: str):
+        self.id = uuid4().hex               # a page left open can't download or delete the scan after this one
         self.scan = scan
         self.name = name
         self.storage = storage
@@ -41,7 +44,7 @@ class ScanJob():
         self.pages = 0
         self.percent: float | None = None
         self.files: list[str] = []          # what the scan made, until it is saved
-        self.saved: list[str] = []          # the names they got in the storage
+        self.saved: list[str] = []          # the names they got in the storage, until they are deleted from it
         self.error: str | None = None
         self._log: deque[str] = deque(maxlen=LOG_LINES)
         self._reply: asyncio.Future | None = None
@@ -92,6 +95,26 @@ class ScanJob():
         self.state = SAVING
         self._run(self._save)
         return True
+
+    @property
+    def download_name(self) -> str:
+        return self.saved[0] if len(self.saved) == 1 else f'{self.name}.zip'
+
+    async def open_download(self) -> BinaryIO:
+        '''The saved file, or a zip of them if there are more. The caller closes it.'''
+        if self.state != SAVED or not self.saved:
+            raise ValueError('There are no saved files of this scan on the server')
+        if len(self.saved) == 1:
+            return await self.storage.open_file(self.saved[0])
+        return await self.storage.open_as_zip(self.saved)
+
+    async def delete_saved(self):
+        '''Deletes the saved files. If one can't be deleted, it and the ones after it stay listed, so this can be tried again.'''
+        if self.state != SAVED:
+            raise ValueError('There are no saved files of this scan on the server')
+        while self.saved:
+            await self.storage.delete_file(self.saved[0])
+            self.saved.pop(0)
 
     async def _guard(self, work):
         try:
