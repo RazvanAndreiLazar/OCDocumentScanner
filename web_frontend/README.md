@@ -6,7 +6,7 @@ A browser UI for the scanner, with the features of `main_cli.py`. One FastAPI pr
 
 ```
 python3 -m venv .venv
-.venv/bin/pip install -r web_frontend/requirements.txt
+.venv/bin/pip install -r printer_backend/requirements.txt -r web_frontend/requirements.txt
 .venv/bin/python -m web_frontend            # from the repository root
 ```
 

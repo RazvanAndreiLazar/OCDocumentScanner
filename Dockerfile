@@ -11,8 +11,9 @@ RUN apt-get update \
 
 WORKDIR /app
 
+COPY printer_backend/requirements.txt backend-requirements.txt
 COPY web_frontend/requirements.txt .
-RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt img2pdf==0.6.1
+RUN pip install --no-cache-dir --root-user-action=ignore -r backend-requirements.txt -r requirements.txt
 
 COPY printer_backend printer_backend
 COPY web_frontend web_frontend

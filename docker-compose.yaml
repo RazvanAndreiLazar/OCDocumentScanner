@@ -52,6 +52,12 @@ services:
         bind:
           create_host_path: false
 
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # Serves ports 80 and 443 on the host and forwards them to the app, with a Let's Encrypt certificate (see proxy/Caddyfile)
   proxy:
     build: ./proxy
@@ -73,6 +79,12 @@ services:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - proxy_data:/data        # the certificate: kept, so a recreated container doesn't ask Let's Encrypt again
       - proxy_config:/config
+      
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   proxy_data:

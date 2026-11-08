@@ -7,10 +7,24 @@
 # DuckDNS's API (DNS-01), so nothing here has to be reachable from the internet.
 {
 	acme_dns duckdns {env.DUCKDNS_TOKEN}
+	# Config changes need `docker compose restart proxy`.
+	admin off
+}
+
+# Stops other sites from putting the scanner in a hidden frame (clickjacking). To embed it in another app
+# later, replace 'none' with 'self' plus that app's origin, e.g. frame-ancestors 'self' https://app.example,
+# and delete the X-Frame-Options line (it can't name an origin, and would still block the frame).
+(security_headers) {
+	header {
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
+		X-Content-Type-Options nosniff
+	}
 }
 
 {$SCANNER_DOMAIN} {
 	bind 192.168.0.250
+	import security_headers
 	reverse_proxy 127.0.0.1:8000
 }
 
@@ -18,6 +32,7 @@
 # browsers remember those, even after this changes.
 http://192.168.0.250 http://scanner.lazar http://{$SCANNER_DOMAIN} {
 	bind 192.168.0.250
+	import security_headers
 	redir https://{$SCANNER_DOMAIN}{uri} 302
 }
 
@@ -25,5 +40,6 @@ http://192.168.0.250 http://scanner.lazar http://{$SCANNER_DOMAIN} {
 # without the "Save as" window. Not a redirect, and nothing else uses it.
 http://192.168.0.250:8080 http://scanner.local {
 	bind 192.168.0.250
+	import security_headers
 	reverse_proxy 127.0.0.1:8000
 }

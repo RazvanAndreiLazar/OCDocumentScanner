@@ -16,7 +16,7 @@ The backend does no direct user input or output during a scan. It reports what h
 
 `printer.py` imports from `options.py` and `scanning.py`, and they don't import it. `printer_repository.py` imports `printer.py`.
 
-**Requirements:** `scanimage` from `sane-utils`, and `img2pdf` for PDF output. The code was written against sane-backends 1.2.1.
+**Requirements:** `scanimage` from `sane-utils`, and `img2pdf` for PDF output (`pip install -r printer_backend/requirements.txt`). The code was written against sane-backends 1.2.1.
 
 ## Using a printer
 
